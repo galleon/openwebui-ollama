@@ -1,0 +1,42 @@
+# Docling-serve — GB10 Blackwell-compatible image
+#
+# The upstream docling-serve-cu128 targets CUDA 12.8 and lacks sm_121 (Blackwell) support.
+# This image builds on NVIDIA NGC PyTorch 26.01 which ships CUDA 13.1 and sm_121 kernels.
+#
+# Forum reference: https://forums.developer.nvidia.com/t/gb10-and-docling/360665
+
+FROM nvcr.io/nvidia/pytorch:26.01-py3
+
+WORKDIR /app
+
+# System deps for document parsing (PDF, OCR, tables)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        # poppler-utils not needed — pypdfium2 bundles its own PDFium binary
+        tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install docling-serve and its extras
+# Pin to a recent known-good release; bump as needed
+RUN pip install --no-cache-dir \
+        "docling-serve[gpu]>=0.4.0" \
+        uvicorn[standard] \
+        fastapi
+
+# Pre-download models at build time so the container is ready immediately
+# (Optional — comment out to keep the image smaller and download at first run)
+RUN python -c "from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline; \
+               StandardPdfPipeline.download_models_hf(force=False)" || true
+
+EXPOSE 5001
+
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=5 \
+    CMD curl -f http://localhost:5001/health || exit 1
+
+CMD ["uvicorn", "docling_serve.app:app", \
+     "--host", "0.0.0.0", \
+     "--port", "5001", \
+     "--workers", "1"]

@@ -1,0 +1,117 @@
+# Docker Compose — Ollama + Open WebUI + Docling
+# Target: NVIDIA DGX Spark (GB10 / Blackwell sm_121)
+#
+# Prerequisites:
+#   - NVIDIA Container Toolkit installed (nvidia-ctk runtime configure --runtime=docker)
+#   - Docker Engine with NVIDIA runtime set as default, OR use `runtime: nvidia` below
+#
+# Quick start:
+#   cp .env.example .env          # adjust as needed
+#   docker compose build docling  # build GB10-compatible docling image
+#   docker compose up -d
+
+services:
+
+  # ─── Ollama ──────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-4}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-2}
+      # Blackwell tuning — keep Flash Attention enabled (default in recent ollama)
+      - OLLAMA_FLASH_ATTENTION=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ─── Open WebUI ──────────────────────────────────────────────────────────────
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "${WEBUI_PORT:-3000}:8080"
+    volumes:
+      - open_webui_data:/app/backend/data
+    environment:
+      # Ollama backend
+      - OLLAMA_BASE_URL=http://ollama:11434
+
+      # Docling as the document extraction engine
+      - CONTENT_EXTRACTION_ENGINE=docling
+      - DOCLING_SERVER_URL=http://docling:5001
+
+      # Auth — set to false only for local/trusted networks
+      - WEBUI_AUTH=${WEBUI_AUTH:-true}
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-changeme-replace-this}
+
+      # RAG / embedding
+      - RAG_EMBEDDING_ENGINE=${RAG_EMBEDDING_ENGINE:-ollama}
+      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-nomic-embed-text}
+
+      # Optional: enable GPU-accelerated reranker
+      - ENABLE_RAG_HYBRID_SEARCH=${ENABLE_RAG_HYBRID_SEARCH:-false}
+    depends_on:
+      ollama:
+        condition: service_healthy
+      docling:
+        condition: service_healthy
+
+  # ─── Docling ─────────────────────────────────────────────────────────────────
+  # Uses a custom image built on the NVIDIA NGC PyTorch 26.01 base which ships
+  # CUDA 13.1 — required for GB10 Blackwell (sm_121).
+  # If you want to try the upstream image first (may fail on GB10):
+  #   image: quay.io/docling-project/docling-serve-cu128:latest
+  docling:
+    build:
+      context: .
+      dockerfile: Dockerfile.docling
+    image: docling-serve-gb10:latest
+    container_name: docling
+    restart: unless-stopped
+    ports:
+      - "${DOCLING_PORT:-5001}:5001"
+    environment:
+      - DOCLING_SERVE_ENABLE_UI=true
+      - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+      # Increase for large/complex documents
+      - DOCLING_SERVE_MAX_SYNC_WAIT=600
+      # Keep at 1 to avoid "Task Not Found" errors
+      - UVICORN_WORKERS=1
+      # Thread tuning for GB10 (Grace CPU has many cores — adjust to taste)
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
+      - DOCLING_SERVE_ENG_LOC_NUM_WORKERS=${DOCLING_WORKERS:-2}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  ollama_data:
+  open_webui_data:
