@@ -6,7 +6,7 @@
 #   - Docker Engine with NVIDIA runtime set as default, OR use `runtime: nvidia` below
 #
 # Quick start:
-#   cp .env.example .env          # adjust as needed
+#   cp .env.example .env          # adjust as needed — WEBUI_SECRET_KEY is mandatory
 #   docker compose build docling  # build GB10-compatible docling image
 #   docker compose up -d
 
@@ -14,7 +14,9 @@ services:
 
   # ─── Ollama ──────────────────────────────────────────────────────────────────
   ollama:
-    image: ollama/ollama:latest
+    # Pin to a specific version for reproducible deployments.
+    # Update intentionally: https://github.com/ollama/ollama/releases
+    image: ollama/ollama:0.5.13
     container_name: ollama
     restart: unless-stopped
     ports:
@@ -26,6 +28,8 @@ services:
       - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-2}
       # Blackwell tuning — keep Flash Attention enabled (default in recent ollama)
       - OLLAMA_FLASH_ATTENTION=1
+    networks:
+      - backend
     deploy:
       resources:
         reservations:
@@ -42,7 +46,9 @@ services:
 
   # ─── Open WebUI ──────────────────────────────────────────────────────────────
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    # Pin to a specific version for reproducible deployments.
+    # Update intentionally: https://github.com/open-webui/open-webui/releases
+    image: ghcr.io/open-webui/open-webui:v0.6.5
     container_name: open-webui
     restart: unless-stopped
     ports:
@@ -59,7 +65,9 @@ services:
 
       # Auth — set to false only for local/trusted networks
       - WEBUI_AUTH=${WEBUI_AUTH:-true}
-      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-changeme-replace-this}
+      # MANDATORY: set WEBUI_SECRET_KEY in your .env file before first run.
+      # No default is provided here — the container will refuse to start without it.
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
 
       # RAG / embedding
       - RAG_EMBEDDING_ENGINE=${RAG_EMBEDDING_ENGINE:-ollama}
@@ -67,11 +75,20 @@ services:
 
       # Optional: enable GPU-accelerated reranker
       - ENABLE_RAG_HYBRID_SEARCH=${ENABLE_RAG_HYBRID_SEARCH:-false}
+    networks:
+      - backend
+      - frontend
     depends_on:
       ollama:
         condition: service_healthy
       docling:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ─── Docling ─────────────────────────────────────────────────────────────────
   # Uses a custom image built on the NVIDIA NGC PyTorch 26.01 base which ships
@@ -88,16 +105,18 @@ services:
     ports:
       - "${DOCLING_PORT:-5001}:5001"
     environment:
-      - DOCLING_SERVE_ENABLE_UI=true
-      - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+      - DOCLING_SERVE_ENABLE_UI=${DOCLING_SERVE_ENABLE_UI:-true}
+      - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=${DOCLING_SERVE_ENABLE_REMOTE_SERVICES:-true}
       # Increase for large/complex documents
-      - DOCLING_SERVE_MAX_SYNC_WAIT=600
+      - DOCLING_SERVE_MAX_SYNC_WAIT=${DOCLING_SERVE_MAX_SYNC_WAIT:-600}
       # Keep at 1 to avoid "Task Not Found" errors
-      - UVICORN_WORKERS=1
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-1}
       # Thread tuning for GB10 (Grace CPU has many cores — adjust to taste)
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
       - DOCLING_SERVE_ENG_LOC_NUM_WORKERS=${DOCLING_WORKERS:-2}
+    networks:
+      - backend
     deploy:
       resources:
         reservations:
@@ -111,6 +130,12 @@ services:
       timeout: 15s
       retries: 5
       start_period: 60s
+
+networks:
+  # Internal network shared by all backend services.
+  backend:
+  # External-facing network — only open-webui is attached.
+  frontend:
 
 volumes:
   ollama_data:

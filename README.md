@@ -42,7 +42,9 @@ docker exec ollama ollama pull llama3.2           # or any model you want
 docker compose up -d
 
 # 5. Open the UI
-open http://localhost:3000
+# macOS:  open http://localhost:3000
+# Linux:  xdg-open http://localhost:3000
+# or just browse to http://localhost:3000
 ```
 
 Docling UI (for testing document extraction): http://localhost:5001/ui
@@ -102,7 +104,7 @@ All tunables live in `.env`. Key ones:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `WEBUI_SECRET_KEY` | *(must set)* | Change before first run |
+| `WEBUI_SECRET_KEY` | *(mandatory)* | **Must be set** before first run — no default provided |
 | `WEBUI_AUTH` | `true` | Set `false` only on a trusted local network |
 | `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | Any Ollama-hosted embedding model |
 | `OLLAMA_NUM_PARALLEL` | `4` | Concurrent inference requests |
@@ -110,6 +112,12 @@ All tunables live in `.env`. Key ones:
 | `OMP_NUM_THREADS` | `8` | Grace CPU has 72 Arm cores — tune to workload |
 | `MKL_NUM_THREADS` | `8` | Same |
 | `DOCLING_WORKERS` | `2` | Parallel doc extraction workers |
+| `DOCLING_SERVE_MAX_SYNC_WAIT` | `600` | Max seconds for a synchronous extraction request |
+| `DOCLING_SERVE_ENABLE_UI` | `true` | Enable Docling web UI at `/ui` |
+| `DOCLING_SERVE_ENABLE_REMOTE_SERVICES` | `true` | Allow Docling to fetch remote resources |
+| `DOCLING_SERVE_PDF_BACKEND` | `pypdfium2` | `pypdfium2` (fast) or `docling_parse` (for malformed PDFs) |
+| `DOCLING_SERVE_PIPELINE_OPTIONS__DO_OCR` | `true` | Set `false` for digital-PDF-only workloads |
+| `UVICORN_WORKERS` | `1` | Keep at 1 to avoid "Task Not Found" errors |
 
 ### Disable OCR for digital PDFs
 

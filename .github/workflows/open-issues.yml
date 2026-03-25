@@ -1,0 +1,345 @@
+name: Open repository issues
+
+# Triggered manually from the Actions tab, or automatically on first push.
+# Creates labelled GitHub Issues for every known problem in this repo.
+on:
+  workflow_dispatch:
+
+jobs:
+  create-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Create labels and open issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: "bug",          color: "d73a4a", description: "Something isn't working" },
+              { name: "security",     color: "e4e669", description: "Security concern" },
+              { name: "enhancement",  color: "a2eeef", description: "New feature or improvement" },
+              { name: "dependencies", color: "0075ca", description: "Dependency version management" },
+              { name: "documentation",color: "0052cc", description: "Documentation improvements" },
+            ];
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  name:  label.name,
+                  color: label.color,
+                  description: label.description,
+                });
+                console.log(`Created label: ${label.name}`);
+              } catch (e) {
+                if (e.status === 422) {
+                  console.log(`Label already exists: ${label.name}`);
+                } else {
+                  throw e;
+                }
+              }
+            }
+
+            const issues = [
+              {
+                title: "Pin Docker image tags for reproducible builds",
+                labels: ["bug", "dependencies"],
+                body: `## Problem
+
+\`docker-compose.yml\` uses mutable image tags:
+
+- \`ollama/ollama:latest\`
+- \`ghcr.io/open-webui/open-webui:main\`
+
+Mutable tags mean a \`docker compose pull\` can silently swap in a breaking release, making deployments non-reproducible and harder to debug.
+
+## Suggested fix
+
+Pin to specific digest or semantic-version tags, e.g.:
+
+\`\`\`yaml
+image: ollama/ollama:0.5.13
+image: ghcr.io/open-webui/open-webui:v0.6.5
+\`\`\`
+
+Track upgrades intentionally via Dependabot or a manual process.`,
+              },
+              {
+                title: "WEBUI_SECRET_KEY has an insecure default fallback value",
+                labels: ["security"],
+                body: `## Problem
+
+\`docker-compose.yml\` sets:
+
+\`\`\`yaml
+- WEBUI_SECRET_KEY=\${WEBUI_SECRET_KEY:-changeme-replace-this}
+\`\`\`
+
+If a user forgets to set \`WEBUI_SECRET_KEY\` in their \`.env\` file, the container starts with a well-known, public default secret key. This is a critical security risk for any internet-accessible deployment.
+
+## Suggested fix
+
+Remove the fallback entirely and let the application fail loudly on startup if the key is not set:
+
+\`\`\`yaml
+- WEBUI_SECRET_KEY=\${WEBUI_SECRET_KEY}
+\`\`\`
+
+Document clearly in \`.env.example\` and the README that this variable is **mandatory**.`,
+              },
+              {
+                title: "Add healthcheck to the open-webui service",
+                labels: ["enhancement"],
+                body: `## Problem
+
+The \`open-webui\` service in \`docker-compose.yml\` has no \`healthcheck\` block. Other services (ollama, docling) both define healthchecks, but \`open-webui\` is missing one, which means Docker/Compose cannot reliably determine when the UI is ready.
+
+## Suggested fix
+
+Add a healthcheck such as:
+
+\`\`\`yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 30s
+\`\`\``,
+              },
+              {
+                title: "Define explicit Docker networks for service isolation",
+                labels: ["enhancement", "security"],
+                body: `## Problem
+
+All services share the implicit default Docker bridge network. This gives every container unrestricted access to every other container on the host.
+
+Best practice is to define named networks and only connect services that actually need to communicate, limiting the blast radius if any single container is compromised.
+
+## Suggested fix
+
+Define at least a \`backend\` network for Ollama ↔ Open WebUI ↔ Docling communication and optionally a \`frontend\` network to expose only Open WebUI externally:
+
+\`\`\`yaml
+networks:
+  backend:
+  frontend:
+\`\`\``,
+              },
+              {
+                title: "Pin pip dependencies in Dockerfile.docling for reproducible builds",
+                labels: ["bug", "dependencies"],
+                body: `## Problem
+
+\`Dockerfile.docling\` installs Python packages without pinning exact versions:
+
+\`\`\`dockerfile
+RUN pip install --no-cache-dir \\
+        "docling-serve[gpu]>=0.4.0" \\
+        uvicorn[standard] \\
+        fastapi
+\`\`\`
+
+- \`uvicorn\` and \`fastapi\` have no version constraints at all.
+- \`docling-serve\` uses a \`>=\` lower bound — any future major release may be installed silently.
+
+This means two builds of the same Dockerfile at different times may produce different images.
+
+## Suggested fix
+
+Pin to exact versions and keep them updated intentionally:
+
+\`\`\`dockerfile
+RUN pip install --no-cache-dir \\
+        "docling-serve[gpu]==0.4.2" \\
+        "uvicorn[standard]==0.34.0" \\
+        "fastapi==0.115.7"
+\`\`\`
+
+Consider using \`pip-compile\` (pip-tools) to manage the full transitive lock file.`,
+              },
+              {
+                title: "Dockerfile.docling runs as root — add a non-root user",
+                labels: ["security"],
+                body: `## Problem
+
+\`Dockerfile.docling\` never switches away from the default \`root\` user. Running application containers as root is a security anti-pattern: if the process is compromised, the attacker has full control over the container filesystem and any mounted volumes.
+
+## Suggested fix
+
+Add a dedicated user near the end of the Dockerfile:
+
+\`\`\`dockerfile
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
+WORKDIR /home/appuser
+\`\`\``,
+              },
+              {
+                title: "Model download failure is silently ignored in Dockerfile.docling",
+                labels: ["bug"],
+                body: `## Problem
+
+\`Dockerfile.docling\` uses \`|| true\` to suppress errors from the model pre-download step:
+
+\`\`\`dockerfile
+RUN python -c "from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline; \\
+               StandardPdfPipeline.download_models_hf(force=False)" || true
+\`\`\`
+
+If this step fails (e.g. network error, API change, disk space), the build succeeds silently and the container will download models at startup instead of at build time — or fail unexpectedly at runtime.
+
+## Suggested fix
+
+Either remove the \`|| true\` and accept that occasional network failures may cause build failures, or document clearly that this step is intentionally best-effort with a comment explaining the trade-off. Alternatively, make the entire step optional via a build ARG:
+
+\`\`\`dockerfile
+ARG PREDOWNLOAD_MODELS=true
+RUN if [ "\$PREDOWNLOAD_MODELS" = "true" ]; then \\
+      python -c "from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline; \\
+                 StandardPdfPipeline.download_models_hf(force=False)"; \\
+    fi
+\`\`\``,
+              },
+              {
+                title: "Add a .dockerignore file to reduce build context size",
+                labels: ["enhancement"],
+                body: `## Problem
+
+There is no \`.dockerignore\` file in the repository. Without it, Docker sends the entire working directory (including \`.git\`, any local \`.env\` files, IDE config, etc.) as the build context. This:
+
+- Slows down builds unnecessarily.
+- Risks accidentally copying secrets from \`.env\` into the image layer.
+
+## Suggested fix
+
+Create a \`.dockerignore\` at the repo root:
+
+\`\`\`
+.git
+.env
+*.md
+.github
+\`\`\``,
+              },
+              {
+                title: "README quick-start uses macOS-only `open` command",
+                labels: ["bug", "documentation"],
+                body: `## Problem
+
+The README quick-start guide contains:
+
+\`\`\`bash
+# 5. Open the UI
+open http://localhost:3000
+\`\`\`
+
+The \`open\` command is a macOS utility. On Linux (where this stack is most likely deployed — e.g. a DGX Spark running Ubuntu) this command is not available by default. Users on Linux need \`xdg-open\` or simply the URL.
+
+## Suggested fix
+
+Replace with a cross-platform note:
+
+\`\`\`bash
+# 5. Open the UI
+# macOS:  open http://localhost:3000
+# Linux:  xdg-open http://localhost:3000
+# or just browse to http://localhost:3000
+\`\`\``,
+              },
+              {
+                title: "Several environment variables are undocumented in .env.example and the README config table",
+                labels: ["documentation"],
+                body: `## Problem
+
+The following environment variables appear in \`docker-compose.yml\` or \`Dockerfile.docling\` but are **not** listed in \`.env.example\` or the README configuration table:
+
+| Variable | Where used |
+|---|---|
+| \`DOCLING_SERVE_MAX_SYNC_WAIT\` | docker-compose.yml |
+| \`DOCLING_SERVE_ENABLE_UI\` | docker-compose.yml |
+| \`DOCLING_SERVE_ENABLE_REMOTE_SERVICES\` | docker-compose.yml |
+| \`DOCLING_SERVE_PDF_BACKEND\` | README (prose) only |
+| \`DOCLING_SERVE_PIPELINE_OPTIONS__DO_OCR\` | README (prose) only |
+| \`UVICORN_WORKERS\` | docker-compose.yml |
+
+Users who want to customise these values have to hunt through the compose file and the README separately.
+
+## Suggested fix
+
+- Add all tuneable variables to \`.env.example\` with sensible defaults and comments.
+- Add a row for each variable to the configuration table in the README.`,
+              },
+              {
+                title: "Repository is missing a LICENSE file",
+                labels: ["documentation"],
+                body: `## Problem
+
+The repository has no \`LICENSE\` file. Without an explicit license, the code is technically "all rights reserved" under copyright law. Users cannot legally use, modify, or distribute the project.
+
+## Suggested fix
+
+Add a \`LICENSE\` file. Common open-source choices for infrastructure/configuration projects:
+
+- **MIT** — permissive, widely used.
+- **Apache 2.0** — permissive with patent protection.
+- **GPL-3.0** — copyleft.
+
+Choose the license that best fits the project's goals.`,
+              },
+              {
+                title: "Add CI workflow to validate docker-compose.yml and Dockerfile syntax",
+                labels: ["enhancement"],
+                body: `## Problem
+
+There is no CI/CD configuration in the repository. Common configuration mistakes (broken YAML, invalid Dockerfile syntax, missing environment variable references) are only caught at deployment time.
+
+## Suggested fix
+
+Add a GitHub Actions workflow that runs on every pull request to:
+
+1. Validate \`docker-compose.yml\` with \`docker compose config\`.
+2. Lint \`Dockerfile.docling\` with [hadolint](https://github.com/hadolint/hadolint).
+3. Optionally run a dry-run build (\`docker buildx build --check\`).`,
+              },
+              {
+                title: "No CPU/memory resource limits defined for Docker services",
+                labels: ["enhancement"],
+                body: `## Problem
+
+\`docker-compose.yml\` defines GPU resource **reservations** for all services, but no CPU or memory **limits**. On a shared or resource-constrained host (e.g. DGX Spark running multiple workloads), a misbehaving service can consume all available CPU/memory and starve others.
+
+## Suggested fix
+
+Add resource limits to each service, e.g.:
+
+\`\`\`yaml
+deploy:
+  resources:
+    limits:
+      cpus: "8"
+      memory: 16G
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+\`\`\`
+
+Tune the values to the actual workload and available hardware.`,
+              },
+            ];
+
+            for (const issue of issues) {
+              const created = await github.rest.issues.create({
+                owner:  context.repo.owner,
+                repo:   context.repo.repo,
+                title:  issue.title,
+                body:   issue.body,
+                labels: issue.labels,
+              });
+              console.log(`Created issue #${created.data.number}: ${issue.title}`);
+            }
