@@ -19,17 +19,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
-# Install docling-serve and its extras
-# Pin to a recent known-good release; bump as needed
+# Install docling-serve and its extras.
+# Pin versions for reproducible builds; update intentionally.
 RUN pip install --no-cache-dir \
-        "docling-serve[gpu]>=0.4.0" \
-        uvicorn[standard] \
-        fastapi
+        "docling-serve[gpu]==0.4.2" \
+        "uvicorn[standard]==0.34.0" \
+        "fastapi==0.115.7"
 
-# Pre-download models at build time so the container is ready immediately
-# (Optional — comment out to keep the image smaller and download at first run)
-RUN python -c "from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline; \
-               StandardPdfPipeline.download_models_hf(force=False)" || true
+# Pre-download models at build time so the container is ready immediately.
+# Pass --build-arg PREDOWNLOAD_MODELS=false to skip (keeps the image smaller).
+ARG PREDOWNLOAD_MODELS=true
+RUN if [ "$PREDOWNLOAD_MODELS" = "true" ]; then \
+      python -c "from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline; \
+                 StandardPdfPipeline.download_models_hf(force=False)"; \
+    fi
+
+# Run as a non-root user
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
 
 EXPOSE 5001
 
@@ -40,3 +47,4 @@ CMD ["uvicorn", "docling_serve.app:app", \
      "--host", "0.0.0.0", \
      "--port", "5001", \
      "--workers", "1"]
+

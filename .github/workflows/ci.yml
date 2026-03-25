@@ -1,0 +1,28 @@
+name: Validate Docker configuration
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml syntax
+        run: docker compose config --quiet
+
+      - name: Lint Dockerfile.docling with hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.docling
+          # DL3008: unpin apt packages (acceptable for system libs)
+          # DL3013: unpin pip packages (addressed separately by pinning)
+          ignore: DL3008
