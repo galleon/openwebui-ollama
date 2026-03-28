@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install docling-serve and its extras
 # Pin to a recent known-good release; bump as needed
 RUN pip install --no-cache-dir \
-        "docling-serve[ui]>=0.4.0" \
+        "docling-serve[ui,easyocr]>=0.4.0" \
         uvicorn[standard] \
         fastapi
 
