@@ -92,8 +92,7 @@ services:
       - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
       # Increase for large/complex documents
       - DOCLING_SERVE_MAX_SYNC_WAIT=600
-      # Keep at 1 to avoid "Task Not Found" errors
-      - UVICORN_WORKERS=1
+      # workers=1 is enforced via CLI flag in Dockerfile CMD (not this env var)
       # Thread tuning for GB10 (Grace CPU has many cores — adjust to taste)
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}

@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install docling-serve and its extras
 # Pin to a recent known-good release; bump as needed
 RUN pip install --no-cache-dir \
-        "docling-serve[gpu]>=0.4.0" \
+        "docling-serve[ui]>=0.4.0" \
         uvicorn[standard] \
         fastapi
 
@@ -38,4 +38,6 @@ HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=5 \
 
 # docling_serve.app exports create_app() (factory pattern), not a bare app object.
 # Use the docling-serve CLI which handles this correctly via uvicorn --factory.
-CMD ["docling-serve", "run", "--host", "0.0.0.0", "--port", "5001"]
+# --workers 1 is mandatory: with multiple workers tasks are created on one
+# worker and polled on another, causing "Task result not found" errors.
+CMD ["docling-serve", "run", "--host", "0.0.0.0", "--port", "5001", "--workers", "1"]
