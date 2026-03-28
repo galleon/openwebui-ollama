@@ -98,6 +98,11 @@ services:
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
       - DOCLING_SERVE_ENG_LOC_NUM_WORKERS=${DOCLING_WORKERS:-2}
+    # NGC PyTorch recommends ipc=host and raised ulimits to avoid SHMEM issues
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
     deploy:
       resources:
         reservations:
