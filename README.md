@@ -155,6 +155,73 @@ docker compose down -v
 
 ---
 
+## Benchmarking
+
+`locustfile.py` benchmarks the OpenWebUI stack under concurrent load and captures streaming-specific metrics that plain HTTP benchmarkers miss.
+
+### Metrics
+
+| Metric | Description |
+|---|---|
+| **TTFT** | Time To First Token — from request send to first streamed token (ms) |
+| **ITL** | Inter-Token Latency — average gap between consecutive tokens (ms) |
+| **E2E** | End-to-end latency including RAG retrieval + full generation (ms) |
+
+Each metric is reported as a separate row in the Locust stats table and CSV, for both the RAG task and the plain (no-KB) baseline.
+
+### Setup
+
+```bash
+pip install locust
+```
+
+### Get your Knowledge Base UUID
+
+In Open WebUI → Workspace → Knowledge, open the knowledge base and copy the UUID from the URL, or via API:
+
+```bash
+curl -s http://localhost:3000/api/v1/knowledge \
+  -H "Authorization: Bearer <api-key>" | jq '.[].id'
+```
+
+### Run
+
+```bash
+export OPENWEBUI_API_KEY=<your-api-key>
+export OPENWEBUI_KB_ID=<knowledge-base-uuid>
+export OPENWEBUI_MODEL=llama3.2
+
+# Interactive web UI at http://localhost:8089
+locust -f locustfile.py --host http://localhost:3000
+
+# Headless — 10 concurrent users, ramp 2/s, 60 s, save CSV
+locust -f locustfile.py --host http://localhost:3000 \
+  --headless -u 10 -r 2 --run-time 60s \
+  --csv=results/bench
+```
+
+### Interpreting results
+
+The `results/bench_stats.csv` will contain rows for each metric type:
+
+```
+Type        Name                     Req   Fail   Avg(ms)   50%   95%   99%   Max
+RAG TTFT    time_to_first_token      120   0      1843      1710  2950  3800  4200
+RAG ITL     inter_token_latency_avg  120   0      42        38    71    95    130
+RAG E2E     end_to_end_latency       120   0      8920      8400  13200 15600 18000
+PLAIN TTFT  time_to_first_token      40    0      320       290   540   710   850
+PLAIN ITL   inter_token_latency_avg  40    0      38        35    65    88    120
+PLAIN E2E   end_to_end_latency       40    0      4100      3800  6200  7900  9100
+```
+
+**TTFT difference (RAG − PLAIN)** is the retrieval overhead added by the RAG pipeline.
+
+### Task weights
+
+The locustfile runs RAG queries at 3× the rate of plain queries. Adjust at the bottom of the file to change the mix.
+
+---
+
 ## Ports summary
 
 | Service | URL |
