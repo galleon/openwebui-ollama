@@ -164,15 +164,26 @@ docker compose down -v
 | Metric | Description |
 |---|---|
 | **TTFT** | Time To First Token — from request send to first streamed token (ms) |
-| **ITL** | Inter-Token Latency — average gap between consecutive tokens (ms) |
-| **E2E** | End-to-end latency including RAG retrieval + full generation (ms) |
+| **ITL avg** | Average inter-token latency — smoothness of streaming (ms) |
+| **ITL p95** | 95th-percentile inter-token latency — tail jitter; high p95 vs avg indicates stalls (ms) |
+| **TPS** | Output throughput reported as ms-per-token — answer-length-neutral, lower is faster |
+| **E2E** | Total end-to-end latency including RAG retrieval + full generation (ms) |
+| **RAG overhead** | `TTFT(RAG) − TTFT(PLAIN)` — isolates the pure cost of vector retrieval (ms) |
 
-Each metric is reported as a separate row in the Locust stats table and CSV, for both the RAG task and the plain (no-KB) baseline.
+Each metric appears as a separate row in the Locust stats table and CSV, for both `RAG` and `PLAIN` (no-KB) task prefixes.
 
 ### Setup
 
 ```bash
-pip install locust
+pip install locust python-dotenv
+```
+
+Fill in the benchmarking section of `.env` (copied from `.env.example`):
+
+```env
+OPENWEBUI_API_KEY=<your-api-key>
+OPENWEBUI_KB_ID=<knowledge-base-uuid>
+OPENWEBUI_MODEL=llama3.2
 ```
 
 ### Get your Knowledge Base UUID
@@ -181,16 +192,12 @@ In Open WebUI → Workspace → Knowledge, open the knowledge base and copy the 
 
 ```bash
 curl -s http://localhost:3000/api/v1/knowledge \
-  -H "Authorization: Bearer <api-key>" | jq '.[].id'
+  -H "Authorization: Bearer $OPENWEBUI_API_KEY" | jq '.[].id'
 ```
 
 ### Run
 
 ```bash
-export OPENWEBUI_API_KEY=<your-api-key>
-export OPENWEBUI_KB_ID=<knowledge-base-uuid>
-export OPENWEBUI_MODEL=llama3.2
-
 # Interactive web UI at http://localhost:8089
 locust -f locustfile.py --host http://localhost:3000
 
@@ -205,20 +212,28 @@ locust -f locustfile.py --host http://localhost:3000 \
 The `results/bench_stats.csv` will contain rows for each metric type:
 
 ```
-Type        Name                     Req   Fail   Avg(ms)   50%   95%   99%   Max
-RAG TTFT    time_to_first_token      120   0      1843      1710  2950  3800  4200
-RAG ITL     inter_token_latency_avg  120   0      42        38    71    95    130
-RAG E2E     end_to_end_latency       120   0      8920      8400  13200 15600 18000
-PLAIN TTFT  time_to_first_token      40    0      320       290   540   710   850
-PLAIN ITL   inter_token_latency_avg  40    0      38        35    65    88    120
-PLAIN E2E   end_to_end_latency       40    0      4100      3800  6200  7900  9100
+Type             Name                     Req  Fail  Avg(ms)  50%   95%    99%
+RAG TTFT         time_to_first_token      120  0     1843     1710  2950   3800
+RAG ITL avg      inter_token_latency_avg  120  0     42       38    71     95
+RAG ITL p95      inter_token_latency_p95  120  0     71       65    120    160
+RAG TPS          ms_per_output_token      120  0     55       50    90     115
+RAG E2E          end_to_end_latency       120  0     8920     8400  13200  15600
+RAG overhead     retrieval_overhead       120  0     1520     1400  2600   3200
+PLAIN TTFT       time_to_first_token      40   0     320      290   540    710
+PLAIN ITL avg    inter_token_latency_avg  40   0     38       35    65     88
+PLAIN ITL p95    inter_token_latency_p95  40   0     65       60    105    140
+PLAIN TPS        ms_per_output_token      40   0     50       46    82     108
+PLAIN E2E        end_to_end_latency       40   0     4100     3800  6200   7900
 ```
 
-**TTFT difference (RAG − PLAIN)** is the retrieval overhead added by the RAG pipeline.
+Key comparisons:
+- **RAG overhead avg** — pure retrieval cost; should stay below ~500 ms for a good UX
+- **ITL p95 / ITL avg ratio** — values above ~3× indicate bursty generation (VRAM pressure, GC)
+- **TPS PLAIN vs RAG** — should be similar; a large gap suggests the RAG context is exceeding the model's optimal context window
 
 ### Task weights
 
-The locustfile runs RAG queries at 3× the rate of plain queries. Adjust at the bottom of the file to change the mix.
+The locustfile runs RAG queries at 3× the rate of plain queries. Adjust the `@task` weights at the bottom of the file to change the mix.
 
 ---
 
