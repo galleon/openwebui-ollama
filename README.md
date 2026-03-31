@@ -174,9 +174,7 @@ Each metric appears as a separate row in the Locust stats table and CSV, for bot
 
 ### Setup
 
-```bash
-pip install locust python-dotenv
-```
+Requires [uv](https://docs.astral.sh/uv/). Dependencies (`locust`, `python-dotenv`) are declared inline in the script and installed automatically on first run.
 
 Fill in the benchmarking section of `.env` (copied from `.env.example`):
 
@@ -184,6 +182,14 @@ Fill in the benchmarking section of `.env` (copied from `.env.example`):
 OPENWEBUI_API_KEY=<your-api-key>
 OPENWEBUI_KB_ID=<knowledge-base-uuid>
 OPENWEBUI_MODEL=llama3.2
+# optional — defaults to bench_questions.json in the same directory
+# OPENWEBUI_QUESTIONS=bench_questions.json
+```
+
+Edit `bench_questions.json` to match your knowledge base content:
+
+```json
+["Where can I buy a ticket?", "What time does the event start?"]
 ```
 
 ### Get your Knowledge Base UUID
@@ -199,12 +205,15 @@ curl -s http://localhost:3000/api/v1/knowledge \
 
 ```bash
 # Interactive web UI at http://localhost:8089
-locust -f locustfile.py --host http://localhost:3000
+./locustfile.py --host http://localhost:3000
 
 # Headless — 10 concurrent users, ramp 2/s, 60 s, save CSV
-locust -f locustfile.py --host http://localhost:3000 \
+./locustfile.py --host http://localhost:3000 \
   --headless -u 10 -r 2 --run-time 60s \
   --csv=results/bench
+
+# Custom questions file
+OPENWEBUI_QUESTIONS=my_questions.json ./locustfile.py --host http://localhost:3000
 ```
 
 ### Interpreting results

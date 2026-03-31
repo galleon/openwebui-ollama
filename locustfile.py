@@ -1,3 +1,11 @@
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "locust",
+#   "python-dotenv",
+# ]
+# ///
 """
 OpenWebUI RAG benchmark — Locust
 
@@ -6,7 +14,7 @@ Metrics reported per request (separate rows in stats table / CSV):
   TTFT          — time from request send to first streamed token (ms)
   ITL avg       — average inter-token latency (ms)
   ITL p95       — 95th-percentile inter-token latency (ms)  *tail jitter*
-  TPS           — tokens per second (output throughput)
+  TPS           — output throughput in ms-per-token (lower = faster)
   E2E           — total end-to-end latency (ms)
   RAG overhead  — TTFT(RAG) − TTFT(PLAIN): time spent on retrieval (ms)
 
@@ -14,18 +22,20 @@ Both a RAG task (with knowledge base) and a PLAIN task (bare chat) are run
 so every metric has a paired comparison.
 
 Configuration — reads from .env in the same directory, then environment:
-  OPENWEBUI_API_KEY   Bearer token        required
-  OPENWEBUI_KB_ID     knowledge-base UUID required for RAG tasks
-  OPENWEBUI_MODEL     model name          default llama3.2
+  OPENWEBUI_API_KEY    Bearer token         required
+  OPENWEBUI_KB_ID      knowledge-base UUID  required for RAG tasks
+  OPENWEBUI_MODEL      model name           default llama3.2
+  OPENWEBUI_QUESTIONS  path to questions JSON file  default bench_questions.json
+
+Questions file format (bench_questions.json):
+  ["Question one?", "Question two?", ...]
 
 Usage:
-  pip install locust python-dotenv
-
   # interactive web UI at http://localhost:8089
-  locust -f locustfile.py --host http://<host>:3000
+  ./locustfile.py --host http://<host>:3000
 
   # headless, 10 concurrent users, ramp 2/s, 60 s, save CSV
-  locust -f locustfile.py --host http://<host>:3000 \\
+  ./locustfile.py --host http://<host>:3000 \\
     --headless -u 10 -r 2 --run-time 60s \\
     --csv=results/bench
 """
@@ -35,19 +45,18 @@ from __future__ import annotations
 import json
 import os
 import random
+import sys
 import time
 from pathlib import Path
 from typing import Generator
 
+from dotenv import load_dotenv
 from locust import HttpUser, between, task
 from locust.exception import StopUser
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent / ".env", override=False)
-except ImportError:
-    pass  # python-dotenv optional; fall back to shell env
+
+load_dotenv(Path(__file__).parent / ".env", override=False)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -55,25 +64,34 @@ API_KEY = os.getenv("OPENWEBUI_API_KEY", "")
 KB_ID   = os.getenv("OPENWEBUI_KB_ID", "")
 MODEL   = os.getenv("OPENWEBUI_MODEL", "llama3.2")
 
-# Edit to match your knowledge base content
-QUESTIONS = [
-    "Where can I buy a ticket?",
-    "What events take place on Saturday?",
-    "Where is the parking area?",
-    "What time does the event start?",
-    "Is there public transport to the venue?",
-    "Where are the toilets located?",
-    "What food options are available?",
-    "Are children allowed?",
-]
+_questions_file = Path(
+    os.getenv("OPENWEBUI_QUESTIONS", Path(__file__).parent / "bench_questions.json")
+)
+
+# ── Load questions ─────────────────────────────────────────────────────────────
+
+def _load_questions(path: Path) -> list[str]:
+    if not path.exists():
+        print(
+            f"[locust] Questions file not found: {path}\n"
+            f"         Create it as a JSON array of strings, e.g.:\n"
+            f'         ["What is X?", "Where is Y?"]',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    questions = json.loads(path.read_text())
+    if not isinstance(questions, list) or not questions:
+        print(f"[locust] {path} must be a non-empty JSON array of strings.", file=sys.stderr)
+        sys.exit(1)
+    print(f"[locust] Loaded {len(questions)} question(s) from {path}", file=sys.stderr)
+    return questions
+
+QUESTIONS = _load_questions(_questions_file)
 
 # ── SSE parser ────────────────────────────────────────────────────────────────
 
 def _iter_tokens(response) -> Generator[tuple[str, int | None], None, None]:
-    """
-    Yield (token_text, completion_tokens_or_None) from an SSE stream.
-    completion_tokens is populated from the final usage chunk when present.
-    """
+    """Yield (token_text, completion_tokens_or_None) from an SSE stream."""
     completion_tokens: int | None = None
     for raw in response.iter_lines():
         if not raw:
@@ -110,8 +128,7 @@ def _percentile(data: list[float], p: float) -> float:
     return s[lo] + (s[hi] - s[lo]) * (idx - lo)
 
 
-# Shared TTFT store for RAG-overhead computation (thread-unsafe but good enough
-# for approximate per-worker deltas; Locust workers don't share memory anyway)
+# Shared TTFT store for RAG-overhead computation (per-worker approximation)
 _last_plain_ttft: float | None = None
 _last_rag_ttft:   float | None = None
 
@@ -156,14 +173,13 @@ class OpenWebUIUser(HttpUser):
     def _stream_query(self, endpoint: str, payload: dict, prefix: str) -> float | None:
         """
         POST a streaming request, collect tokens, fire all metrics.
-        Returns TTFT in ms (or None on failure) so callers can compute overhead.
+        Returns TTFT in ms (or None on failure).
 
         Metrics fired:
           {prefix} TTFT    — time to first token (ms)
           {prefix} ITL avg — mean inter-token gap (ms)
           {prefix} ITL p95 — 95th-pct inter-token gap (ms)
-          {prefix} TPS     — output tokens per second (stored as inverted ms so
-                             Locust's "avg response time" = avg ms-per-token)
+          {prefix} TPS     — ms-per-output-token (lower = faster)
           {prefix} E2E     — total latency (ms)
         """
         global _last_plain_ttft, _last_rag_ttft
@@ -203,13 +219,11 @@ class OpenWebUIUser(HttpUser):
             exc = e
 
         e2e_ms = (time.perf_counter() - t_start) * 1000
-        n_tokens = completion_tokens or token_chars  # chars as rough proxy
+        n_tokens = completion_tokens or token_chars
 
-        # TTFT
         if ttft_ms is not None:
             self._fire(f"{prefix} TTFT", "time_to_first_token", ttft_ms, 0, exc)
 
-        # ITL avg + p95
         if len(token_times) > 1:
             gaps = [
                 (token_times[i] - token_times[i - 1]) * 1000
@@ -218,15 +232,11 @@ class OpenWebUIUser(HttpUser):
             self._fire(f"{prefix} ITL avg", "inter_token_latency_avg", sum(gaps) / len(gaps), n_tokens, exc)
             self._fire(f"{prefix} ITL p95", "inter_token_latency_p95", _percentile(gaps, 95), n_tokens, exc)
 
-        # TPS — reported as ms-per-token so lower = faster (fits Locust's scale)
         if n_tokens > 0 and e2e_ms > 0:
-            ms_per_token = e2e_ms / n_tokens
-            self._fire(f"{prefix} TPS", "ms_per_output_token", ms_per_token, n_tokens, exc)
+            self._fire(f"{prefix} TPS", "ms_per_output_token", e2e_ms / n_tokens, n_tokens, exc)
 
-        # E2E
         self._fire(f"{prefix} E2E", "end_to_end_latency", e2e_ms, n_tokens, exc)
 
-        # Store for RAG-overhead computation
         if prefix == "PLAIN":
             _last_plain_ttft = ttft_ms
         elif prefix == "RAG":
@@ -249,8 +259,6 @@ class OpenWebUIUser(HttpUser):
             },
             prefix="RAG",
         )
-
-        # RAG retrieval overhead = how much longer TTFT is vs plain baseline
         if rag_ttft is not None and _last_plain_ttft is not None:
             overhead = max(0.0, rag_ttft - _last_plain_ttft)
             self._fire("RAG overhead", "retrieval_overhead_vs_plain", overhead)
