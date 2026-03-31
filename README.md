@@ -61,10 +61,10 @@ Docling UI (for testing document extraction): http://localhost:5001/ui
       :11434               :5001
              │               │
     ┌────────┴──────┐  ┌─────┴──────────────┐
-    │    Ollama     │  │      Docling        │
-    │  (inference + │  │  (doc extraction +  │
-    │   embeddings) │  │   OCR + tables)     │
-    └───────────────┘  └─────────────────────┘
+    │    Ollama     │  │      Docling       │
+    │  (inference + │  │  (doc extraction + │
+    │   embeddings) │  │   OCR + tables)    │
+    └───────────────┘  └────────────────────┘
           GPU                  GPU
 ```
 
