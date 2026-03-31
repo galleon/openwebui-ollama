@@ -1,34 +1,33 @@
 """
 OpenWebUI RAG benchmark — Locust
 
-Measures three metrics per request, reported as separate Locust request types
-so they appear as distinct rows in the stats table and CSV output:
+Metrics reported per request (separate rows in stats table / CSV):
 
-  RAG TTFT   — time from request send to first token received (ms)
-  RAG ITL    — average inter-token latency across the full response (ms)
-  RAG E2E    — total end-to-end latency including RAG retrieval (ms)
+  TTFT          — time from request send to first streamed token (ms)
+  ITL avg       — average inter-token latency (ms)
+  ITL p95       — 95th-percentile inter-token latency (ms)  *tail jitter*
+  TPS           — tokens per second (output throughput)
+  E2E           — total end-to-end latency (ms)
+  RAG overhead  — TTFT(RAG) − TTFT(PLAIN): time spent on retrieval (ms)
 
-A plain (no-KB) chat task is also included so you can isolate RAG overhead.
+Both a RAG task (with knowledge base) and a PLAIN task (bare chat) are run
+so every metric has a paired comparison.
 
-Configuration (environment variables):
-  OPENWEBUI_HOST      base URL,          default http://localhost:3000
-  OPENWEBUI_API_KEY   Bearer token       required
-  OPENWEBUI_KB_ID     knowledge-base UUID  required for RAG tasks
-  OPENWEBUI_MODEL     model name         default llama3.2
+Configuration — reads from .env in the same directory, then environment:
+  OPENWEBUI_API_KEY   Bearer token        required
+  OPENWEBUI_KB_ID     knowledge-base UUID required for RAG tasks
+  OPENWEBUI_MODEL     model name          default llama3.2
 
 Usage:
-  pip install locust
+  pip install locust python-dotenv
 
-  # interactive web UI
+  # interactive web UI at http://localhost:8089
   locust -f locustfile.py --host http://<host>:3000
 
-  # headless, 10 concurrent users, ramp 2/s, 60 s run, save CSV
-  locust -f locustfile.py --host http://<host>:3000 \
-    --headless -u 10 -r 2 --run-time 60s \
+  # headless, 10 concurrent users, ramp 2/s, 60 s, save CSV
+  locust -f locustfile.py --host http://<host>:3000 \\
+    --headless -u 10 -r 2 --run-time 60s \\
     --csv=results/bench
-
-Environment variables can be passed inline:
-  OPENWEBUI_API_KEY=sk-xxx OPENWEBUI_KB_ID=<uuid> locust -f locustfile.py ...
 """
 
 from __future__ import annotations
@@ -37,10 +36,18 @@ import json
 import os
 import random
 import time
+from pathlib import Path
 from typing import Generator
 
-from locust import HttpUser, between, events, task
+from locust import HttpUser, between, task
 from locust.exception import StopUser
+
+# ── Load .env ─────────────────────────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env", override=False)
+except ImportError:
+    pass  # python-dotenv optional; fall back to shell env
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -48,7 +55,7 @@ API_KEY = os.getenv("OPENWEBUI_API_KEY", "")
 KB_ID   = os.getenv("OPENWEBUI_KB_ID", "")
 MODEL   = os.getenv("OPENWEBUI_MODEL", "llama3.2")
 
-# Sample questions — edit to match your knowledge base content
+# Edit to match your knowledge base content
 QUESTIONS = [
     "Where can I buy a ticket?",
     "What events take place on Saturday?",
@@ -60,16 +67,14 @@ QUESTIONS = [
     "Are children allowed?",
 ]
 
-# ── SSE stream parser ─────────────────────────────────────────────────────────
+# ── SSE parser ────────────────────────────────────────────────────────────────
 
 def _iter_tokens(response) -> Generator[tuple[str, int | None], None, None]:
     """
-    Yield (token_text, total_tokens_or_None) from an SSE streaming response.
-
-    total_tokens is filled only on the final [DONE]-preceding usage chunk
-    when the server includes it; otherwise None.
+    Yield (token_text, completion_tokens_or_None) from an SSE stream.
+    completion_tokens is populated from the final usage chunk when present.
     """
-    total_tokens: int | None = None
+    completion_tokens: int | None = None
     for raw in response.iter_lines():
         if not raw:
             continue
@@ -83,19 +88,32 @@ def _iter_tokens(response) -> Generator[tuple[str, int | None], None, None]:
             chunk = json.loads(payload)
         except json.JSONDecodeError:
             continue
-
-        # Some servers send a usage chunk before [DONE]
         usage = chunk.get("usage")
         if usage:
-            total_tokens = usage.get("completion_tokens")
-
+            completion_tokens = usage.get("completion_tokens")
         try:
             content = chunk["choices"][0]["delta"].get("content") or ""
         except (KeyError, IndexError):
             content = ""
-
         if content:
-            yield content, total_tokens
+            yield content, completion_tokens
+
+
+# ── Metric helpers ────────────────────────────────────────────────────────────
+
+def _percentile(data: list[float], p: float) -> float:
+    if not data:
+        return 0.0
+    s = sorted(data)
+    idx = (len(s) - 1) * p / 100
+    lo, hi = int(idx), min(int(idx) + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (idx - lo)
+
+
+# Shared TTFT store for RAG-overhead computation (thread-unsafe but good enough
+# for approximate per-worker deltas; Locust workers don't share memory anyway)
+_last_plain_ttft: float | None = None
+_last_rag_ttft:   float | None = None
 
 
 # ── Locust user ───────────────────────────────────────────────────────────────
@@ -105,9 +123,9 @@ class OpenWebUIUser(HttpUser):
 
     def on_start(self) -> None:
         if not API_KEY:
-            raise StopUser("Set OPENWEBUI_API_KEY before running")
+            raise StopUser("Set OPENWEBUI_API_KEY in .env or environment")
         if not KB_ID:
-            raise StopUser("Set OPENWEBUI_KB_ID before running")
+            raise StopUser("Set OPENWEBUI_KB_ID in .env or environment")
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -135,18 +153,26 @@ class OpenWebUIUser(HttpUser):
             context={},
         )
 
-    def _stream_query(
-        self,
-        endpoint: str,
-        payload: dict,
-        metric_prefix: str,
-    ) -> None:
-        """Send a streaming POST and record TTFT, ITL, and E2E metrics."""
+    def _stream_query(self, endpoint: str, payload: dict, prefix: str) -> float | None:
+        """
+        POST a streaming request, collect tokens, fire all metrics.
+        Returns TTFT in ms (or None on failure) so callers can compute overhead.
+
+        Metrics fired:
+          {prefix} TTFT    — time to first token (ms)
+          {prefix} ITL avg — mean inter-token gap (ms)
+          {prefix} ITL p95 — 95th-pct inter-token gap (ms)
+          {prefix} TPS     — output tokens per second (stored as inverted ms so
+                             Locust's "avg response time" = avg ms-per-token)
+          {prefix} E2E     — total latency (ms)
+        """
+        global _last_plain_ttft, _last_rag_ttft
+
         t_start = time.perf_counter()
         ttft_ms: float | None = None
         token_times: list[float] = []
         token_chars = 0
-        total_tokens: int | None = None
+        completion_tokens: int | None = None
         exc: Exception | None = None
 
         try:
@@ -160,16 +186,16 @@ class OpenWebUIUser(HttpUser):
             ) as resp:
                 if resp.status_code != 200:
                     resp.failure(f"HTTP {resp.status_code}")
-                    return
+                    return None
 
-                for token, t_count in _iter_tokens(resp):
+                for token, ct in _iter_tokens(resp):
                     now = time.perf_counter()
                     if ttft_ms is None:
                         ttft_ms = (now - t_start) * 1000
                     token_times.append(now)
                     token_chars += len(token)
-                    if t_count is not None:
-                        total_tokens = t_count
+                    if ct is not None:
+                        completion_tokens = ct
 
                 resp.success()
 
@@ -177,36 +203,43 @@ class OpenWebUIUser(HttpUser):
             exc = e
 
         e2e_ms = (time.perf_counter() - t_start) * 1000
-        response_length = total_tokens or token_chars
+        n_tokens = completion_tokens or token_chars  # chars as rough proxy
 
         # TTFT
         if ttft_ms is not None:
-            self._fire(f"{metric_prefix} TTFT", "time_to_first_token", ttft_ms, 0, exc)
+            self._fire(f"{prefix} TTFT", "time_to_first_token", ttft_ms, 0, exc)
 
-        # ITL — average gap between successive tokens
+        # ITL avg + p95
         if len(token_times) > 1:
             gaps = [
                 (token_times[i] - token_times[i - 1]) * 1000
                 for i in range(1, len(token_times))
             ]
-            avg_itl = sum(gaps) / len(gaps)
-            self._fire(
-                f"{metric_prefix} ITL",
-                "inter_token_latency_avg",
-                avg_itl,
-                response_length,
-                exc,
-            )
+            self._fire(f"{prefix} ITL avg", "inter_token_latency_avg", sum(gaps) / len(gaps), n_tokens, exc)
+            self._fire(f"{prefix} ITL p95", "inter_token_latency_p95", _percentile(gaps, 95), n_tokens, exc)
+
+        # TPS — reported as ms-per-token so lower = faster (fits Locust's scale)
+        if n_tokens > 0 and e2e_ms > 0:
+            ms_per_token = e2e_ms / n_tokens
+            self._fire(f"{prefix} TPS", "ms_per_output_token", ms_per_token, n_tokens, exc)
 
         # E2E
-        self._fire(f"{metric_prefix} E2E", "end_to_end_latency", e2e_ms, response_length, exc)
+        self._fire(f"{prefix} E2E", "end_to_end_latency", e2e_ms, n_tokens, exc)
+
+        # Store for RAG-overhead computation
+        if prefix == "PLAIN":
+            _last_plain_ttft = ttft_ms
+        elif prefix == "RAG":
+            _last_rag_ttft = ttft_ms
+
+        return ttft_ms
 
     # ── tasks ─────────────────────────────────────────────────────────────────
 
     @task(3)
     def rag_query(self) -> None:
-        """Chat completion with knowledge-base retrieval (RAG)."""
-        self._stream_query(
+        """Chat completion with knowledge-base retrieval."""
+        rag_ttft = self._stream_query(
             endpoint="/api/chat/completions",
             payload={
                 "model": MODEL,
@@ -214,8 +247,13 @@ class OpenWebUIUser(HttpUser):
                 "files": [{"type": "collection", "id": KB_ID}],
                 "stream": True,
             },
-            metric_prefix="RAG",
+            prefix="RAG",
         )
+
+        # RAG retrieval overhead = how much longer TTFT is vs plain baseline
+        if rag_ttft is not None and _last_plain_ttft is not None:
+            overhead = max(0.0, rag_ttft - _last_plain_ttft)
+            self._fire("RAG overhead", "retrieval_overhead_vs_plain", overhead)
 
     @task(1)
     def plain_query(self) -> None:
@@ -227,5 +265,5 @@ class OpenWebUIUser(HttpUser):
                 "messages": [{"role": "user", "content": random.choice(QUESTIONS)}],
                 "stream": True,
             },
-            metric_prefix="PLAIN",
+            prefix="PLAIN",
         )
