@@ -1,0 +1,22 @@
+# Infinity embedding / reranking server on DGX Spark (GB10 / Blackwell sm_121)
+#
+# Infinity serves:
+#   - Embeddings  → POST /v1/embeddings  (OpenAI-compatible)
+#   - Reranking   → POST /rerank         (Cohere-compatible)
+#
+# The upstream infinity images target CUDA 12.x and lack sm_121 kernels.
+# This image builds on NGC PyTorch 26.01 (CUDA 13.1) for full Blackwell support.
+#
+# The model to load and the port are passed at runtime via `command:` in
+# docker-compose so the same image serves both the embedder and reranker.
+
+FROM nvcr.io/nvidia/pytorch:26.01-py3
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging
+
+# infinity-emb: torch + optimum backends, Flash Attention 2 for throughput
+RUN pip install --no-cache-dir "infinity-emb[torch,optimum,flash_attn]"
+
+EXPOSE 7997
+
+ENTRYPOINT ["infinity_emb", "v2"]

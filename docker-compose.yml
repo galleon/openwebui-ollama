@@ -62,11 +62,25 @@ services:
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-changeme-replace-this}
 
       # RAG / embedding
+      # Default: ollama (nomic-embed-text). To use the dedicated GPU embedder:
+      #   set RAG_EMBEDDING_ENGINE=openai and start with --profile embedder
       - RAG_EMBEDDING_ENGINE=${RAG_EMBEDDING_ENGINE:-ollama}
       - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-nomic-embed-text}
+      - RAG_OPENAI_API_BASE_URL=${RAG_OPENAI_API_BASE_URL:-http://embedder:7997/v1}
+      - RAG_OPENAI_API_KEY=${RAG_OPENAI_API_KEY:-EMPTY}
+      - RAG_OPENAI_BATCH_SIZE=${RAG_OPENAI_BATCH_SIZE:-32}
 
-      # Optional: enable GPU-accelerated reranker
+      # Reranker (hybrid search)
+      # Default: disabled. To use the dedicated GPU reranker:
+      #   set ENABLE_RAG_HYBRID_SEARCH=true, RAG_RERANKING_ENGINE=external
+      #   and start with --profile reranker
       - ENABLE_RAG_HYBRID_SEARCH=${ENABLE_RAG_HYBRID_SEARCH:-false}
+      - RAG_RERANKING_ENGINE=${RAG_RERANKING_ENGINE:-}
+      - RAG_RERANKING_MODEL=${RAG_RERANKING_MODEL:-}
+      - RAG_EXTERNAL_RERANKER_URL=${RAG_EXTERNAL_RERANKER_URL:-http://reranker:7998/rerank}
+      - RAG_EXTERNAL_RERANKER_API_KEY=${RAG_EXTERNAL_RERANKER_API_KEY:-EMPTY}
+      - RAG_TOP_K=${RAG_TOP_K:-5}
+      - RAG_TOP_K_RERANKER=${RAG_TOP_K_RERANKER:-3}
 
       # Vector store — default: chroma (built-in, no extra service needed)
       # Set VECTOR_DB=qdrant and start with: docker compose --profile qdrant up -d
@@ -132,6 +146,107 @@ services:
       timeout: 15s
       retries: 5
       start_period: 60s
+
+  # ─── Embedder (optional GPU embedding server) ────────────────────────────────
+  # Activate with:  docker compose --profile embedder up -d
+  # Then set RAG_EMBEDDING_ENGINE=openai in .env and restart open-webui.
+  #
+  # Exposes an OpenAI-compatible /v1/embeddings endpoint.
+  # Default model: BAAI/bge-m3  (multilingual, 1024-dim, strong cross-lingual)
+  # Override via EMBEDDER_MODEL in .env.
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.infinity
+    image: infinity-gb10:latest
+    container_name: embedder
+    restart: unless-stopped
+    profiles: [embedder]
+    ports:
+      - "${EMBEDDER_PORT:-7997}:7997"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - "--model-name-or-path"
+      - "${EMBEDDER_MODEL:-BAAI/bge-m3}"
+      - "--port"
+      - "7997"
+      - "--host"
+      - "0.0.0.0"
+      - "--batch-size"
+      - "${EMBEDDER_BATCH_SIZE:-32}"
+      - "--device"
+      - "cuda"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # ─── Reranker (optional GPU reranking server) ─────────────────────────────────
+  # Activate with:  docker compose --profile reranker up -d
+  # Then set ENABLE_RAG_HYBRID_SEARCH=true and RAG_RERANKING_ENGINE=external
+  # in .env and restart open-webui.
+  #
+  # Exposes a Cohere-compatible /rerank endpoint.
+  # Default model: BAAI/bge-reranker-v2-m3  (multilingual cross-encoder)
+  # Override via RERANKER_MODEL in .env.
+  reranker:
+    build:
+      context: .
+      dockerfile: Dockerfile.infinity
+    image: infinity-gb10:latest
+    container_name: reranker
+    restart: unless-stopped
+    profiles: [reranker]
+    ports:
+      - "${RERANKER_PORT:-7998}:7998"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - "--model-name-or-path"
+      - "${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}"
+      - "--port"
+      - "7998"
+      - "--host"
+      - "0.0.0.0"
+      - "--batch-size"
+      - "${RERANKER_BATCH_SIZE:-32}"
+      - "--device"
+      - "cuda"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7998/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
 
   # ─── vLLM (optional OpenAI-compatible inference server) ─────────────────────
   # Activate with:  docker compose --profile vllm up -d

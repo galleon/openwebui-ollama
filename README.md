@@ -8,6 +8,8 @@ Local AI stack optimised for the **NVIDIA DGX Spark (GB10 / Blackwell sm_121)**.
 | Open WebUI | `ghcr.io/open-webui/open-webui:main` | 3000 | *(always on)* |
 | Docling | custom (NGC PyTorch 26.01 base) | 5001 | *(always on)* |
 | vLLM | custom (NGC PyTorch 26.01 base) | 8000 | `vllm` |
+| Embedder | custom (NGC PyTorch 26.01 base) | 7997 | `embedder` |
+| Reranker | custom (NGC PyTorch 26.01 base) | 7998 | `reranker` |
 | Qdrant | `qdrant/qdrant:latest` | 6333 / 6334 | `qdrant` |
 
 ---
@@ -112,6 +114,72 @@ All tunables live in `.env`. Key ones:
 | `OMP_NUM_THREADS` | `8` | Grace CPU has 72 Arm cores — tune to workload |
 | `MKL_NUM_THREADS` | `8` | Same |
 | `DOCLING_WORKERS` | `2` | Parallel doc extraction workers |
+
+### Use a dedicated GPU embedder
+
+By default Open WebUI uses Ollama for embeddings (`nomic-embed-text`). The `embedder` service runs [Infinity](https://github.com/michaelfeil/infinity) with a dedicated embedding model for higher throughput and multilingual coverage.
+
+1. Build the image (shared with the reranker):
+   ```bash
+   docker compose build embedder
+   ```
+
+2. Set in `.env`:
+   ```env
+   EMBEDDER_MODEL=BAAI/bge-m3        # multilingual, 1024-dim
+   RAG_EMBEDDING_ENGINE=openai
+   RAG_EMBEDDING_MODEL=BAAI/bge-m3
+   RAG_OPENAI_API_BASE_URL=http://embedder:7997/v1
+   ```
+
+3. Start:
+   ```bash
+   docker compose --profile embedder up -d
+   docker compose restart open-webui
+   ```
+
+### Use a dedicated GPU reranker
+
+The `reranker` service runs Infinity with a cross-encoder model. Reranking re-scores the initial top-k candidates from vector search, significantly improving retrieval precision.
+
+1. Build (same image as embedder):
+   ```bash
+   docker compose build reranker
+   ```
+
+2. Set in `.env`:
+   ```env
+   RERANKER_MODEL=BAAI/bge-reranker-v2-m3   # multilingual cross-encoder
+   ENABLE_RAG_HYBRID_SEARCH=true
+   RAG_RERANKING_ENGINE=external
+   RAG_EXTERNAL_RERANKER_URL=http://reranker:7998/rerank
+   RAG_TOP_K=5            # candidates fed to reranker
+   RAG_TOP_K_RERANKER=3   # final results returned after reranking
+   ```
+
+3. Start:
+   ```bash
+   docker compose --profile reranker up -d
+   docker compose restart open-webui
+   ```
+
+**Using both together** (recommended for best retrieval quality):
+```bash
+docker compose --profile embedder --profile reranker up -d
+```
+
+**Model recommendations:**
+
+| Use case | Model |
+|---|---|
+| Multilingual embedding (default) | `BAAI/bge-m3` |
+| English-only, fast | `BAAI/bge-large-en-v1.5` |
+| Multilingual reranking (default) | `BAAI/bge-reranker-v2-m3` |
+| English-only reranking | `BAAI/bge-reranker-large` |
+
+> **Note on GB10 compatibility**: `Dockerfile.infinity` builds on NGC PyTorch 26.01 (CUDA 13.1) for native `sm_121` support, same as Docling and vLLM.
+
+---
 
 ### Use vLLM as an inference backend
 
