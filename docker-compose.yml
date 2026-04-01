@@ -71,15 +71,13 @@ services:
 
   # ─── vLLM ────────────────────────────────────────────────────────────────────
   # OpenAI-compatible inference server — sole LLM backend for Open WebUI.
-  # Built on NGC PyTorch 26.01 for CUDA 13.1 / sm_121 (GB10 Blackwell) support.
+  # Uses NVIDIA's official NGC vLLM container (CUDA 13.x, native sm_121 support).
+  # No custom build needed — pulled directly from NGC.
   #
   # Model is loaded from HuggingFace Hub at startup — set VLLM_MODEL in .env.
   # Gated models (Llama, Mistral, …) require HUGGING_FACE_HUB_TOKEN.
   vllm:
-    build:
-      context: .
-      dockerfile: Dockerfile.vllm
-    image: vllm-gb10:latest
+    image: nvcr.io/nvidia/vllm:${VLLM_NGC_TAG:-26.02-py3}
     container_name: vllm
     restart: unless-stopped
     ports:

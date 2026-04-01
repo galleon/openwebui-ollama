@@ -7,7 +7,7 @@ Ollama is not used.
 | Service | Image | Port | Profile |
 |---|---|---|---|
 | Open WebUI | `ghcr.io/open-webui/open-webui:main` | 3000 | *(always on)* |
-| vLLM | custom (NGC PyTorch 26.01 base) | 8000 | *(always on)* |
+| vLLM | `nvcr.io/nvidia/vllm:26.02-py3` | 8000 | *(always on)* |
 | Embedder | custom (NGC PyTorch 26.01 base) | 7997 | *(always on)* |
 | Docling | custom (NGC PyTorch 26.01 base) | 5001 | *(always on)* |
 | Reranker | custom (NGC PyTorch 26.01 base) | 7998 | `reranker` |
@@ -32,14 +32,14 @@ Ollama is not used.
 ```bash
 # 1. Configure environment
 cp .env.example .env
-#    Edit .env — set WEBUI_SECRET_KEY and VLLM_MODEL at minimum
+#    Edit .env — set WEBUI_SECRET_KEY, VLLM_MODEL, and HUGGING_FACE_HUB_TOKEN
 
-# 2. Build the three GB10-compatible images
-#    (pulls ~10 GB NGC PyTorch base on first run, shared across all three)
-docker compose build
+# 2. Build the GB10-compatible images (Docling + Infinity)
+#    vLLM uses the official NGC image — no build needed for it
+docker compose build docling embedder
 
 # 3. Start everything
-#    vLLM downloads VLLM_MODEL from HuggingFace on first run (~14 GB for a 7B)
+#    vLLM pulls nvcr.io/nvidia/vllm:26.02-py3 then downloads VLLM_MODEL from HF
 docker compose up -d
 
 # 4. Open the UI — vLLM models appear automatically once healthy (~2 min)
@@ -90,11 +90,13 @@ add the reranker (~2 GB) with `--profile reranker`.
 
 ---
 
-## Why custom images?
+## Why custom images for Docling and Infinity?
 
-The upstream images (`vllm/vllm-openai`, `michaelfeil/infinity`, `docling-serve-cu128`) target **CUDA 12.x** and lack native `sm_121` kernels for the GB10 Blackwell architecture, causing runtime JIT compilation failures.
+The upstream `michaelfeil/infinity` and `docling-serve-cu128` images target **CUDA 12.x** and lack native `sm_121` kernels for the GB10 Blackwell architecture, causing runtime JIT compilation failures.
 
-All three `Dockerfile.*` files build on `nvcr.io/nvidia/pytorch:26.01-py3` which ships **CUDA 13.1** with full `sm_121` support.
+`Dockerfile.docling` and `Dockerfile.infinity` build on `nvcr.io/nvidia/pytorch:26.01-py3` which ships **CUDA 13.1** with full `sm_121` support.
+
+vLLM uses NVIDIA's official NGC image (`nvcr.io/nvidia/vllm:26.02-py3`) which already includes Blackwell support — no custom build needed.
 
 ---
 
