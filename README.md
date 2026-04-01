@@ -111,6 +111,39 @@ All tunables live in `.env`. Key ones:
 | `MKL_NUM_THREADS` | `8` | Same |
 | `DOCLING_WORKERS` | `2` | Parallel doc extraction workers |
 
+### Use Qdrant as the vector store
+
+By default Open WebUI uses its built-in **Chroma** database (no extra service needed). To switch to **Qdrant**:
+
+1. Start the bundled Qdrant service via its profile:
+   ```bash
+   docker compose --profile qdrant up -d
+   ```
+
+2. Set in `.env`:
+   ```env
+   VECTOR_DB=qdrant
+   QDRANT_URI=http://qdrant:6333
+   ```
+
+3. Restart Open WebUI to pick up the change:
+   ```bash
+   docker compose restart open-webui
+   ```
+
+To use an **existing external Qdrant instance** instead (skip step 1):
+```env
+VECTOR_DB=qdrant
+QDRANT_URI=http://<your-qdrant-host>:6333
+QDRANT_API_KEY=<optional-key>
+```
+
+Optional gRPC (lower latency for high-throughput ingestion):
+```env
+QDRANT_PREFER_GRPC=true
+QDRANT_GRPC_PORT=6334
+```
+
 ### Disable OCR for digital PDFs
 
 ```env

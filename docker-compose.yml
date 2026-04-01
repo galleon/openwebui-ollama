@@ -67,6 +67,15 @@ services:
 
       # Optional: enable GPU-accelerated reranker
       - ENABLE_RAG_HYBRID_SEARCH=${ENABLE_RAG_HYBRID_SEARCH:-false}
+
+      # Vector store — default: chroma (built-in, no extra service needed)
+      # Set VECTOR_DB=qdrant and start with: docker compose --profile qdrant up -d
+      - VECTOR_DB=${VECTOR_DB:-chroma}
+      - QDRANT_URI=${QDRANT_URI:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT_PREFER_GRPC=${QDRANT_PREFER_GRPC:-false}
+      - QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
+      - QDRANT_TIMEOUT=${QDRANT_TIMEOUT:-}
     depends_on:
       ollama:
         condition: service_healthy
@@ -90,6 +99,8 @@ services:
     environment:
       - DOCLING_SERVE_ENABLE_UI=true
       - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+      # All PDFs treated as image-based — OCR every page regardless of text layer
+      - DOCLING_SERVE_PIPELINE_OPTIONS__DO_OCR=true
       # Increase for large/complex documents
       - DOCLING_SERVE_MAX_SYNC_WAIT=600
       # workers=1 is enforced via CLI flag in Dockerfile CMD (not this env var)
@@ -116,6 +127,30 @@ services:
       retries: 5
       start_period: 60s
 
+  # ─── Qdrant (optional external vector store) ─────────────────────────────────
+  # Activate with:  docker compose --profile qdrant up -d
+  # Then set VECTOR_DB=qdrant in .env and restart open-webui.
+  #
+  # To use an existing external Qdrant instance instead, leave this service
+  # disabled and point QDRANT_URI at your instance.
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    profiles: [qdrant]
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 volumes:
   ollama_data:
   open_webui_data:
+  qdrant_data:
