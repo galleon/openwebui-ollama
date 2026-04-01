@@ -37,7 +37,7 @@ services:
       # RAG / embedding — Infinity embedder replaces Ollama
       - RAG_EMBEDDING_ENGINE=openai
       - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-BAAI/bge-m3}
-      - RAG_OPENAI_API_BASE_URL=http://embedder:7997/v1
+      - RAG_OPENAI_API_BASE_URL=http://embedder:7997
       - RAG_OPENAI_API_KEY=${RAG_OPENAI_API_KEY:-EMPTY}
       - RAG_OPENAI_BATCH_SIZE=${RAG_OPENAI_BATCH_SIZE:-32}
 
