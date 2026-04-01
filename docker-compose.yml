@@ -117,7 +117,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 120s
+      start_period: 1200s
 
   # ─── Embedder ────────────────────────────────────────────────────────────────
   # GPU embedding server (Infinity) — replaces Ollama's embedding function.
