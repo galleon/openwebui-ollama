@@ -14,10 +14,10 @@ FROM nvcr.io/nvidia/pytorch:26.01-py3
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging
 
-# infinity-emb: torch backend only.
+# infinity-emb: torch backend + server (uvicorn) extras.
 # - [optimum] dropped: optimum.bettertransformer was removed in optimum >= 1.23
 # - [flash_attn] dropped: NGC PyTorch 26.01 already ships FlashAttention 2
-RUN pip install --no-cache-dir "infinity-emb[torch]"
+RUN pip install --no-cache-dir "infinity-emb[torch,server]"
 
 EXPOSE 7997
 
