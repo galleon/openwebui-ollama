@@ -98,6 +98,7 @@ services:
       - "${VLLM_MAX_MODEL_LEN:-8192}"
       - "--gpu-memory-utilization"
       - "${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
+      - "--trust-remote-code"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
     ipc: host
