@@ -151,6 +151,12 @@ services:
   # Activate with:  docker compose --profile embedder up -d
   # Then set RAG_EMBEDDING_ENGINE=openai in .env and restart open-webui.
   #
+  # Note: no depends_on from open-webui — Compose does not allow depends_on to
+  # reference a service that belongs to a profile not currently active.
+  # open-webui connects to the embedder on-demand (first document ingestion),
+  # not at startup, so the ordering is safe as long as the embedder is healthy
+  # before you ingest documents.
+  #
   # Exposes an OpenAI-compatible /v1/embeddings endpoint.
   # Default model: BAAI/bge-m3  (multilingual, 1024-dim, strong cross-lingual)
   # Override via EMBEDDER_MODEL in .env.
@@ -253,6 +259,9 @@ services:
   #
   # vLLM exposes an OpenAI-compatible API at :8000/v1.  Open WebUI picks it up
   # automatically via OPENAI_API_BASE_URL=http://vllm:8000/v1 (set in .env).
+  # Note: no depends_on from open-webui (same reason as embedder/reranker above).
+  # open-webui polls /v1/models at intervals, so vLLM models appear in the UI
+  # once the container is healthy — no restart of open-webui needed.
   #
   # Model is loaded from HuggingFace Hub at startup — set VLLM_MODEL in .env.
   # Gated models (Llama, Mistral, …) require HUGGING_FACE_HUB_TOKEN.
