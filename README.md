@@ -2,11 +2,13 @@
 
 Local AI stack optimised for the **NVIDIA DGX Spark (GB10 / Blackwell sm_121)**.
 
-| Service | Image | Port |
-|---|---|---|
-| Ollama | `ollama/ollama:latest` | 11434 |
-| Open WebUI | `ghcr.io/open-webui/open-webui:main` | 3000 |
-| Docling | custom (NGC PyTorch 26.01 base) | 5001 |
+| Service | Image | Port | Profile |
+|---|---|---|---|
+| Ollama | `ollama/ollama:latest` | 11434 | *(always on)* |
+| Open WebUI | `ghcr.io/open-webui/open-webui:main` | 3000 | *(always on)* |
+| Docling | custom (NGC PyTorch 26.01 base) | 5001 | *(always on)* |
+| vLLM | custom (NGC PyTorch 26.01 base) | 8000 | `vllm` |
+| Qdrant | `qdrant/qdrant:latest` | 6333 / 6334 | `qdrant` |
 
 ---
 
@@ -110,6 +112,41 @@ All tunables live in `.env`. Key ones:
 | `OMP_NUM_THREADS` | `8` | Grace CPU has 72 Arm cores — tune to workload |
 | `MKL_NUM_THREADS` | `8` | Same |
 | `DOCLING_WORKERS` | `2` | Parallel doc extraction workers |
+
+### Use vLLM as an inference backend
+
+vLLM runs alongside Ollama as an additional OpenAI-compatible API. Open WebUI lists both backends' models in the same model selector.
+
+1. Build the GB10-compatible vLLM image:
+   ```bash
+   docker compose build vllm
+   ```
+
+2. Set in `.env`:
+   ```env
+   VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct   # any HuggingFace model ID
+   OPENAI_API_BASE_URL=http://vllm:8000/v1
+   OPENAI_API_KEY=EMPTY
+   # For gated models (Llama, Mistral, …):
+   HUGGING_FACE_HUB_TOKEN=hf_...
+   ```
+
+3. Start with the vLLM profile:
+   ```bash
+   docker compose --profile vllm up -d
+   ```
+
+**Multi-GPU**: set `VLLM_TENSOR_PARALLEL_SIZE` to the number of GPUs to shard the model across.
+
+**Memory tuning**: `VLLM_GPU_MEMORY_UTILIZATION` (default `0.90`) and `VLLM_MAX_MODEL_LEN` (default `8192`) control VRAM allocation and context window.
+
+The HuggingFace cache is persisted in the `hf_cache` Docker volume — models are only downloaded once.
+
+---
+
+> **Note on GB10 compatibility**: The upstream `vllm/vllm-openai` image targets CUDA 12.x and lacks native `sm_121` kernels. `Dockerfile.vllm` builds on the same NGC PyTorch 26.01 base as Docling for full Blackwell support.
+
+---
 
 ### Use Qdrant as the vector store
 

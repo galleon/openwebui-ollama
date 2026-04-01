@@ -76,6 +76,12 @@ services:
       - QDRANT_PREFER_GRPC=${QDRANT_PREFER_GRPC:-false}
       - QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
       - QDRANT_TIMEOUT=${QDRANT_TIMEOUT:-}
+
+      # vLLM OpenAI-compatible backend (optional)
+      # Activate with: docker compose --profile vllm up -d
+      # Open WebUI will list vLLM models alongside Ollama models automatically.
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
     depends_on:
       ollama:
         condition: service_healthy
@@ -127,6 +133,60 @@ services:
       retries: 5
       start_period: 60s
 
+  # ─── vLLM (optional OpenAI-compatible inference server) ─────────────────────
+  # Activate with:  docker compose --profile vllm up -d
+  #
+  # vLLM exposes an OpenAI-compatible API at :8000/v1.  Open WebUI picks it up
+  # automatically via OPENAI_API_BASE_URL=http://vllm:8000/v1 (set in .env).
+  #
+  # Model is loaded from HuggingFace Hub at startup — set VLLM_MODEL in .env.
+  # Gated models (Llama, Mistral, …) require HUGGING_FACE_HUB_TOKEN.
+  # HF cache is persisted in the hf_cache volume to avoid re-downloads.
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+    image: vllm-gb10:latest
+    container_name: vllm
+    restart: unless-stopped
+    profiles: [vllm]
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--tensor-parallel-size"
+      - "${VLLM_TENSOR_PARALLEL_SIZE:-1}"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
   # ─── Qdrant (optional external vector store) ─────────────────────────────────
   # Activate with:  docker compose --profile qdrant up -d
   # Then set VECTOR_DB=qdrant in .env and restart open-webui.
@@ -154,3 +214,4 @@ volumes:
   ollama_data:
   open_webui_data:
   qdrant_data:
+  hf_cache:
