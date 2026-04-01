@@ -60,7 +60,7 @@ services:
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       - QDRANT_PREFER_GRPC=${QDRANT_PREFER_GRPC:-false}
       - QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
-      - QDRANT_TIMEOUT=${QDRANT_TIMEOUT:-}
+      - QDRANT_TIMEOUT=${QDRANT_TIMEOUT:-5}
     depends_on:
       vllm:
         condition: service_healthy
