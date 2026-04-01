@@ -12,14 +12,15 @@
 
 FROM nvcr.io/nvidia/pytorch:26.01-py3
 
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging
+# Bring in uv from the official image — faster than pip for resolution + install
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # infinity-emb: torch + server (uvicorn) extras.
 # The NGC base ships optimum >= 1.23 which removed optimum.bettertransformer.
 # infinity-emb checks BetterTransformerManager at startup and crashes when it
 # is not defined. Pin optimum to the last version that still has the module.
 # [flash_attn] dropped: NGC PyTorch 26.01 already ships FlashAttention 2.
-RUN pip install --no-cache-dir "infinity-emb[torch,server]" "optimum<1.21"
+RUN uv pip install --system --no-cache "infinity-emb[torch,server]" "optimum<1.21"
 
 EXPOSE 7997
 
