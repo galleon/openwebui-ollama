@@ -134,7 +134,7 @@ services:
     volumes:
       - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
     command:
-      - "--model-name-or-path"
+      - "--model-id"
       - "${EMBEDDER_MODEL:-BAAI/bge-m3}"
       - "--port"
       - "7997"
@@ -228,7 +228,7 @@ services:
     volumes:
       - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
     command:
-      - "--model-name-or-path"
+      - "--model-id"
       - "${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}"
       - "--port"
       - "7998"
