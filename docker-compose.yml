@@ -85,7 +85,7 @@ services:
     ports:
       - "${VLLM_PORT:-8000}:8000"
     volumes:
-      - hf_cache:/root/.cache/huggingface
+      - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
     command:
       - "--model"
       - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
@@ -133,7 +133,7 @@ services:
     ports:
       - "${EMBEDDER_PORT:-7997}:7997"
     volumes:
-      - hf_cache:/root/.cache/huggingface
+      - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
     command:
       - "--model-name-or-path"
       - "${EMBEDDER_MODEL:-BAAI/bge-m3}"
@@ -227,7 +227,7 @@ services:
     ports:
       - "${RERANKER_PORT:-7998}:7998"
     volumes:
-      - hf_cache:/root/.cache/huggingface
+      - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
     command:
       - "--model-name-or-path"
       - "${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}"
@@ -285,4 +285,3 @@ services:
 volumes:
   open_webui_data:
   qdrant_data:
-  hf_cache:
