@@ -1,4 +1,4 @@
-# Docker Compose — Ollama + Open WebUI + Docling
+# Docker Compose — Open WebUI + vLLM + Docling + Infinity
 # Target: NVIDIA DGX Spark (GB10 / Blackwell sm_121)
 #
 # Prerequisites:
@@ -6,39 +6,11 @@
 #   - Docker Engine with NVIDIA runtime set as default, OR use `runtime: nvidia` below
 #
 # Quick start:
-#   cp .env.example .env          # adjust as needed
-#   docker compose build docling  # build GB10-compatible docling image
+#   cp .env.example .env                      # adjust as needed
+#   docker compose build docling vllm embedder  # build GB10-compatible images
 #   docker compose up -d
 
 services:
-
-  # ─── Ollama ──────────────────────────────────────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-4}
-      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-2}
-      # Blackwell tuning — keep Flash Attention enabled (default in recent ollama)
-      - OLLAMA_FLASH_ATTENTION=1
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
 
   # ─── Open WebUI ──────────────────────────────────────────────────────────────
   open-webui:
@@ -50,8 +22,9 @@ services:
     volumes:
       - open_webui_data:/app/backend/data
     environment:
-      # Ollama backend
-      - OLLAMA_BASE_URL=http://ollama:11434
+      # vLLM as the sole inference backend (OpenAI-compatible)
+      - OPENAI_API_BASE_URL=http://vllm:8000/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
 
       # Docling as the document extraction engine
       - CONTENT_EXTRACTION_ENGINE=docling
@@ -61,12 +34,10 @@ services:
       - WEBUI_AUTH=${WEBUI_AUTH:-true}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-changeme-replace-this}
 
-      # RAG / embedding
-      # Default: ollama (nomic-embed-text). To use the dedicated GPU embedder:
-      #   set RAG_EMBEDDING_ENGINE=openai and start with --profile embedder
-      - RAG_EMBEDDING_ENGINE=${RAG_EMBEDDING_ENGINE:-ollama}
-      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-nomic-embed-text}
-      - RAG_OPENAI_API_BASE_URL=${RAG_OPENAI_API_BASE_URL:-http://embedder:7997/v1}
+      # RAG / embedding — Infinity embedder replaces Ollama
+      - RAG_EMBEDDING_ENGINE=openai
+      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-BAAI/bge-m3}
+      - RAG_OPENAI_API_BASE_URL=http://embedder:7997/v1
       - RAG_OPENAI_API_KEY=${RAG_OPENAI_API_KEY:-EMPTY}
       - RAG_OPENAI_BATCH_SIZE=${RAG_OPENAI_BATCH_SIZE:-32}
 
@@ -90,21 +61,112 @@ services:
       - QDRANT_PREFER_GRPC=${QDRANT_PREFER_GRPC:-false}
       - QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
       - QDRANT_TIMEOUT=${QDRANT_TIMEOUT:-}
-
-      # vLLM OpenAI-compatible backend (optional)
-      # Activate with: docker compose --profile vllm up -d
-      # Open WebUI will list vLLM models alongside Ollama models automatically.
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
     depends_on:
-      ollama:
+      vllm:
+        condition: service_healthy
+      embedder:
         condition: service_healthy
       docling:
         condition: service_healthy
 
+  # ─── vLLM ────────────────────────────────────────────────────────────────────
+  # OpenAI-compatible inference server — sole LLM backend for Open WebUI.
+  # Built on NGC PyTorch 26.01 for CUDA 13.1 / sm_121 (GB10 Blackwell) support.
+  #
+  # Model is loaded from HuggingFace Hub at startup — set VLLM_MODEL in .env.
+  # Gated models (Llama, Mistral, …) require HUGGING_FACE_HUB_TOKEN.
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+    image: vllm-gb10:latest
+    container_name: vllm
+    restart: unless-stopped
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--tensor-parallel-size"
+      - "${VLLM_TENSOR_PARALLEL_SIZE:-1}"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # ─── Embedder ────────────────────────────────────────────────────────────────
+  # GPU embedding server (Infinity) — replaces Ollama's embedding function.
+  # Exposes an OpenAI-compatible /v1/embeddings endpoint.
+  # Default model: BAAI/bge-m3  (multilingual, 1024-dim)
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.infinity
+    image: infinity-gb10:latest
+    container_name: embedder
+    restart: unless-stopped
+    ports:
+      - "${EMBEDDER_PORT:-7997}:7997"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - "--model-name-or-path"
+      - "${EMBEDDER_MODEL:-BAAI/bge-m3}"
+      - "--port"
+      - "7997"
+      - "--host"
+      - "0.0.0.0"
+      - "--batch-size"
+      - "${EMBEDDER_BATCH_SIZE:-32}"
+      - "--device"
+      - "cuda"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
   # ─── Docling ─────────────────────────────────────────────────────────────────
-  # Uses a custom image built on the NVIDIA NGC PyTorch 26.01 base which ships
-  # CUDA 13.1 — required for GB10 Blackwell (sm_121).
+  # Document extraction + OCR. Built on NGC PyTorch 26.01 for sm_121 support.
   # If you want to try the upstream image first (may fail on GB10):
   #   image: quay.io/docling-project/docling-serve-cu128:latest
   docling:
@@ -147,62 +209,6 @@ services:
       retries: 5
       start_period: 60s
 
-  # ─── Embedder (optional GPU embedding server) ────────────────────────────────
-  # Activate with:  docker compose --profile embedder up -d
-  # Then set RAG_EMBEDDING_ENGINE=openai in .env and restart open-webui.
-  #
-  # Note: no depends_on from open-webui — Compose does not allow depends_on to
-  # reference a service that belongs to a profile not currently active.
-  # open-webui connects to the embedder on-demand (first document ingestion),
-  # not at startup, so the ordering is safe as long as the embedder is healthy
-  # before you ingest documents.
-  #
-  # Exposes an OpenAI-compatible /v1/embeddings endpoint.
-  # Default model: BAAI/bge-m3  (multilingual, 1024-dim, strong cross-lingual)
-  # Override via EMBEDDER_MODEL in .env.
-  embedder:
-    build:
-      context: .
-      dockerfile: Dockerfile.infinity
-    image: infinity-gb10:latest
-    container_name: embedder
-    restart: unless-stopped
-    profiles: [embedder]
-    ports:
-      - "${EMBEDDER_PORT:-7997}:7997"
-    volumes:
-      - hf_cache:/root/.cache/huggingface
-    command:
-      - "--model-name-or-path"
-      - "${EMBEDDER_MODEL:-BAAI/bge-m3}"
-      - "--port"
-      - "7997"
-      - "--host"
-      - "0.0.0.0"
-      - "--batch-size"
-      - "${EMBEDDER_BATCH_SIZE:-32}"
-      - "--device"
-      - "cuda"
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-    ipc: host
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 90s
-
   # ─── Reranker (optional GPU reranking server) ─────────────────────────────────
   # Activate with:  docker compose --profile reranker up -d
   # Then set ENABLE_RAG_HYBRID_SEARCH=true and RAG_RERANKING_ENGINE=external
@@ -210,7 +216,6 @@ services:
   #
   # Exposes a Cohere-compatible /rerank endpoint.
   # Default model: BAAI/bge-reranker-v2-m3  (multilingual cross-encoder)
-  # Override via RERANKER_MODEL in .env.
   reranker:
     build:
       context: .
@@ -254,63 +259,6 @@ services:
       retries: 10
       start_period: 90s
 
-  # ─── vLLM (optional OpenAI-compatible inference server) ─────────────────────
-  # Activate with:  docker compose --profile vllm up -d
-  #
-  # vLLM exposes an OpenAI-compatible API at :8000/v1.  Open WebUI picks it up
-  # automatically via OPENAI_API_BASE_URL=http://vllm:8000/v1 (set in .env).
-  # Note: no depends_on from open-webui (same reason as embedder/reranker above).
-  # open-webui polls /v1/models at intervals, so vLLM models appear in the UI
-  # once the container is healthy — no restart of open-webui needed.
-  #
-  # Model is loaded from HuggingFace Hub at startup — set VLLM_MODEL in .env.
-  # Gated models (Llama, Mistral, …) require HUGGING_FACE_HUB_TOKEN.
-  # HF cache is persisted in the hf_cache volume to avoid re-downloads.
-  vllm:
-    build:
-      context: .
-      dockerfile: Dockerfile.vllm
-    image: vllm-gb10:latest
-    container_name: vllm
-    restart: unless-stopped
-    profiles: [vllm]
-    ports:
-      - "${VLLM_PORT:-8000}:8000"
-    volumes:
-      - hf_cache:/root/.cache/huggingface
-    command:
-      - "--model"
-      - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8000"
-      - "--tensor-parallel-size"
-      - "${VLLM_TENSOR_PARALLEL_SIZE:-1}"
-      - "--max-model-len"
-      - "${VLLM_MAX_MODEL_LEN:-8192}"
-      - "--gpu-memory-utilization"
-      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-    ipc: host
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 120s
-
   # ─── Qdrant (optional external vector store) ─────────────────────────────────
   # Activate with:  docker compose --profile qdrant up -d
   # Then set VECTOR_DB=qdrant in .env and restart open-webui.
@@ -335,7 +283,6 @@ services:
       start_period: 20s
 
 volumes:
-  ollama_data:
   open_webui_data:
   qdrant_data:
   hf_cache:
