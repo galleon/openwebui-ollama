@@ -34,15 +34,20 @@ Ollama is not used.
 cp .env.example .env
 #    Edit .env — set WEBUI_SECRET_KEY, VLLM_MODEL, and HUGGING_FACE_HUB_TOKEN
 
-# 2. Build the GB10-compatible images (Docling + Infinity)
+# 2. Download the Nemotron reasoning parser (required for all Nemotron-Nano models)
+mkdir -p ./vllm_plugins
+wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
+  https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
+
+# 3. Build the GB10-compatible images (Docling + Infinity)
 #    vLLM uses the official NGC image — no build needed for it
 docker compose build docling embedder
 
-# 3. Start everything
+# 4. Start everything
 #    vLLM pulls nvcr.io/nvidia/vllm:26.02-py3 then downloads VLLM_MODEL from HF
 docker compose up -d
 
-# 4. Open the UI — vLLM models appear automatically once healthy (~2 min)
+# 5. Open the UI — vLLM models appear automatically once healthy (~15 min for 30B)
 open http://localhost:3000
 ```
 
