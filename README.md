@@ -180,6 +180,47 @@ docling:
 
 ---
 
+## Embedder and reranker: GPU vs CPU
+
+The embedder and reranker default to `--device cuda`. This section explains the trade-off if you switch to CPU.
+
+### Throughput comparison
+
+From Infinity startup logs, `BAAI/bge-m3` on the GB10 GPU achieves **87–2056 embeddings/sec** (batch_size=32). On CPU:
+
+| Scenario | GPU | CPU (Grace, 72 cores) |
+|---|---|---|
+| Query embedding (RAG lookup) | ~15 ms | ~100–300 ms |
+| Document ingestion (batch) | ~12 ms/batch | ~200–500 ms/batch |
+| Reranking 5 candidates | ~20 ms | ~150–400 ms |
+| RAG overhead per query | ~50 ms | ~300–700 ms |
+
+### GPU memory freed by switching to CPU
+
+| Service | GPU memory reclaimed |
+|---|---|
+| Embedder (bge-m3) | ~3 GB |
+| Reranker (bge-reranker-v2-m3) | ~2 GB |
+| **Total** | **~5 GB** |
+
+That 5 GB could be redirected to a larger vLLM KV cache (~4K–8K extra context tokens at fp8).
+
+### When CPU is acceptable
+
+| Workload | CPU verdict |
+|---|---|
+| Single user, interactive chat | Acceptable — 300–700 ms RAG overhead is barely noticeable |
+| Concurrent users (> 3) | Bottleneck — CPU saturates, RAG latency spikes to seconds |
+| Bulk document ingestion | Painful — a 100-page document takes minutes instead of seconds |
+
+### Recommendation
+
+Keep both services on GPU. The GB10 has 128 GB unified memory — 5 GB is not worth a 10–30× throughput regression. Switch to CPU only if you are running a model large enough to be genuinely memory-constrained.
+
+To switch, change `--device cuda` to `--device cpu` in the `embedder` and `reranker` commands in `docker-compose.yml`.
+
+---
+
 ## RAG architecture and HA considerations
 
 ### Default configuration
