@@ -180,6 +180,99 @@ docling:
 
 ---
 
+## RAG architecture and HA considerations
+
+### Default configuration
+
+Out of the box, the stack uses three components that are **node-local**:
+
+| Component | Default | Location |
+|---|---|---|
+| Vector store | Chroma (built-in) | Inside the `open-webui` container, stored in the `open_webui_data` Docker volume |
+| Embedder | Infinity (`BAAI/bge-m3`) | Local GPU service on port 7997 |
+| Reranker | Infinity (`BAAI/bge-reranker-v2-m3`) | Local GPU service on port 7998 (optional profile) |
+
+All knowledge bases, chat history, and user data live inside the `open_webui_data` named volume on a single machine.
+
+### Pros of the default setup
+
+- **Zero external dependencies** — fully self-contained, works immediately after `docker compose up`
+- **Low latency** — embedder and vector store are on the same host, no network round-trips for RAG
+- **Simple operations** — one machine to manage, backup, or wipe
+- **GPU-accelerated embeddings** — Infinity uses the GB10 GPU, much faster than CPU-based alternatives
+
+### Cons for a 2-site HA setup
+
+| Problem | Impact |
+|---|---|
+| **Chroma is not distributed** | Each site has its own independent vector store; knowledge bases are not shared between sites |
+| **No replication** | Documents uploaded on site A are invisible on site B |
+| **Local embedder** | Each site embeds independently — if embedding models diverge (version, config), vectors become incompatible across sites |
+| **Stateful Open WebUI volume** | User accounts, chat history, and settings are not synchronised; a user logging in on site B sees a different state than on site A |
+| **Single point of failure** | If the DGX Spark on one site goes down, that site loses the entire stack — there is no failover |
+
+### Improving the setup for HA / multi-site
+
+The two changes with the highest impact are externalising the vector store and the Open WebUI database.
+
+#### 1. Shared vector store — external Qdrant cluster
+
+Replace per-site Chroma with a **shared Qdrant cluster** (or Qdrant Cloud). Both sites point at the same instance; documents uploaded anywhere are immediately queryable everywhere.
+
+```env
+VECTOR_DB=qdrant
+QDRANT_URI=http://<shared-qdrant-host>:6333
+QDRANT_API_KEY=<your-key>
+```
+
+For true HA, deploy Qdrant in distributed mode across nodes (Qdrant supports sharding and replication natively). A minimal 2-node setup with `replication_factor=2` survives a single-node failure.
+
+#### 2. Shared Open WebUI database — external Postgres
+
+By default Open WebUI uses SQLite inside the container. For multi-site you need a shared relational database so that users, knowledge base metadata, and chat history are consistent across sites.
+
+Set the `DATABASE_URL` environment variable in `docker-compose.yml` under `open-webui`:
+
+```yaml
+- DATABASE_URL=postgresql://user:password@<shared-postgres-host>:5432/openwebui
+```
+
+Open WebUI supports PostgreSQL out of the box via SQLAlchemy.
+
+#### 3. Consistent embeddings across sites
+
+Both sites must use the **same embedding model at the same version** — otherwise vectors stored by site A are not comparable to queries from site B, breaking RAG retrieval.
+
+Pin the model explicitly in `.env` and avoid `latest` tags:
+
+```env
+EMBEDDER_MODEL=BAAI/bge-m3
+```
+
+The HF model cache (`./hf_cache`) should be pre-populated and kept in sync, or pointed at a shared NFS/S3-backed cache, to avoid re-downloading on each site.
+
+#### 4. Active/passive vs active/active
+
+| Mode | Approach | Complexity |
+|---|---|---|
+| **Active/passive** | DNS failover or load balancer points users to the live site; passive site is warm but idle | Low — shared Qdrant + Postgres is sufficient |
+| **Active/active** | Both sites serve traffic simultaneously; load balancer distributes requests | High — also requires session affinity or stateless Open WebUI sessions |
+
+For most deployments, **active/passive with shared Qdrant + Postgres** is the right starting point: it eliminates data loss on failover while keeping operational complexity manageable.
+
+### Summary
+
+```
+Default (single site)          HA (2 sites)
+─────────────────────          ────────────
+Chroma (local volume)    →     Qdrant cluster (shared, replicated)
+SQLite (local volume)    →     PostgreSQL (shared)
+Embedder (local GPU)     →     Same model version on each site, same HF cache
+Open WebUI (stateful)    →     Stateless sessions + shared DB
+```
+
+---
+
 ## Useful commands
 
 ```bash
