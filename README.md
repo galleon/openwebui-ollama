@@ -83,15 +83,19 @@ With the default `VLLM_GPU_MEMORY_UTILIZATION=0.55` and Nemotron-3-Nano-30B-NVFP
 | Component | Memory |
 |---|---|
 | vLLM model weights (30B NVFP4) | ~15 GB |
-| vLLM KV cache (fp8, 0.55 utilization) | ~55 GB |
+| vLLM KV cache (fp8, 0.55 utilization) | ~59 GB |
 | Embedder (bge-m3) | ~3 GB |
-| Docling (EasyOCR) | ~3 GB |
-| OS + Open WebUI | ~2 GB |
-| **Total** | **~78 GB** |
-| **Headroom** | **~50 GB** |
+| Docling (EasyOCR, multiple language models) | ~9 GB |
+| OS + desktop | ~1 GB |
+| **Total** | **~87 GB** |
+| **Headroom** | **~41 GB** |
+
+> Figures measured from `nvidia-smi` on a live stack. Docling uses ~9 GB due to
+> EasyOCR loading multiple language model weights — significantly more than the ~3 GB
+> often cited in documentation.
 
 Raise `VLLM_GPU_MEMORY_UTILIZATION` toward `0.70` for longer context windows;
-add the reranker (~2 GB) with `--profile reranker`.
+add the reranker (~2 GB) with `--profile reranker` (reduces headroom to ~39 GB).
 
 ---
 
