@@ -78,19 +78,19 @@ Docling UI (for testing document extraction): http://localhost:5001/ui
 ## GB10 unified memory budget
 
 The GB10 has **128 GB unified memory** shared between CPU and GPU.
-With the default `VLLM_GPU_MEMORY_UTILIZATION=0.55` and a 7B model:
+With the default `VLLM_GPU_MEMORY_UTILIZATION=0.55` and Nemotron-3-Nano-30B-NVFP4:
 
 | Component | Memory |
 |---|---|
-| vLLM model weights (7B FP16) | ~14 GB |
-| vLLM KV cache (0.55 utilization) | ~63 GB |
+| vLLM model weights (30B NVFP4) | ~15 GB |
+| vLLM KV cache (fp8, 0.55 utilization) | ~55 GB |
 | Embedder (bge-m3) | ~3 GB |
 | Docling (EasyOCR) | ~3 GB |
 | OS + Open WebUI | ~2 GB |
-| **Total** | **~85 GB** |
-| **Headroom** | **~43 GB** |
+| **Total** | **~78 GB** |
+| **Headroom** | **~50 GB** |
 
-Raise `VLLM_GPU_MEMORY_UTILIZATION` toward `0.80` for larger context windows;
+Raise `VLLM_GPU_MEMORY_UTILIZATION` toward `0.70` for longer context windows;
 add the reranker (~2 GB) with `--profile reranker`.
 
 ---
@@ -112,7 +112,7 @@ All tunables live in `.env`. Key ones:
 | Variable | Default | Notes |
 |---|---|---|
 | `WEBUI_SECRET_KEY` | *(must set)* | Change before first run |
-| `VLLM_MODEL` | `Qwen/Qwen2.5-7B-Instruct` | Any HuggingFace model ID |
+| `VLLM_MODEL` | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4` | Any HuggingFace model ID |
 | `VLLM_GPU_MEMORY_UTILIZATION` | `0.55` | See memory budget above |
 | `VLLM_MAX_MODEL_LEN` | `8192` | Context window in tokens |
 | `EMBEDDER_MODEL` | `BAAI/bge-m3` | Any sentence-transformers model |
@@ -361,7 +361,7 @@ Fill in the benchmarking section of `.env` (copied from `.env.example`):
 ```env
 OPENWEBUI_API_KEY=<your-api-key>
 OPENWEBUI_KB_ID=<knowledge-base-uuid>
-OPENWEBUI_MODEL=Qwen/Qwen2.5-7B-Instruct
+OPENWEBUI_MODEL=nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4
 ```
 
 Edit `bench_questions.json` to match your knowledge base content:
