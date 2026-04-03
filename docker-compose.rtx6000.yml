@@ -1,0 +1,68 @@
+# Docker Compose override — RTX Pro 6000 Blackwell benchmark
+#
+# Applies on top of docker-compose.yml:
+#   - Moves Docling to CPU (saves ~9 GB VRAM for vLLM KV cache)
+#   - Pins all GPU containers to device 0
+#   - Enables CUDA MPS for better multi-process GPU sharing
+#
+# Usage (single GPU):
+#   cp .env.rtx6000 .env
+#   docker compose --profile reranker \
+#     -f docker-compose.yml -f docker-compose.rtx6000.yml up -d
+#
+# Usage (two GPUs, two independent stacks):
+#   # Stack A on GPU 0 (ports as defined in .env)
+#   CUDA_VISIBLE_DEVICES=0 docker compose --profile reranker \
+#     -f docker-compose.yml -f docker-compose.rtx6000.yml \
+#     --project-name stack-a up -d
+#
+#   # Stack B on GPU 1 (override ports in a second .env)
+#   CUDA_VISIBLE_DEVICES=1 VLLM_PORT=8001 EMBEDDER_PORT=7999 \
+#   RERANKER_PORT=7998 WEBUI_PORT=3001 \
+#   docker compose --profile reranker \
+#     -f docker-compose.yml -f docker-compose.rtx6000.yml \
+#     --project-name stack-b up -d
+
+services:
+
+  # Move Docling to CPU — frees ~9 GB VRAM for vLLM KV cache.
+  # Document ingestion is not on the hot path for RAG query benchmarks.
+  docling:
+    deploy:
+      resources:
+        reservations:
+          devices: []   # no GPU reservation
+    environment:
+      - DOCLING_SERVE_PIPELINE_OPTIONS__DO_OCR=true
+      # More threads available on a typical x86 benchmark host
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-16}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-16}
+
+  # Pin vLLM, embedder, and reranker explicitly to GPU 0.
+  # When running two stacks, set CUDA_VISIBLE_DEVICES externally instead.
+  vllm:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  embedder:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  reranker:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
