@@ -27,12 +27,12 @@ services:
 
   # Move Docling to CPU — frees ~9 GB VRAM for vLLM KV cache.
   # Document ingestion is not on the hot path for RAG query benchmarks.
+  # Note: Docker Compose does not support removing a device reservation via override.
+  # Setting CUDA_VISIBLE_DEVICES= (empty) hides all GPUs from the process, which
+  # effectively forces CPU execution without touching the deploy block.
   docling:
-    deploy:
-      resources:
-        reservations:
-          devices: []   # no GPU reservation
     environment:
+      - CUDA_VISIBLE_DEVICES=
       - DOCLING_SERVE_PIPELINE_OPTIONS__DO_OCR=true
       # More threads available on a typical x86 benchmark host
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-16}
