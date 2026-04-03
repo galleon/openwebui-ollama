@@ -267,7 +267,7 @@ class OpenWebUIUser(HttpUser):
     def plain_query(self) -> None:
         """Plain chat completion without RAG — baseline for comparison."""
         self._stream_query(
-            endpoint="/openai/v1/chat/completions",
+            endpoint="/api/chat/completions",
             payload={
                 "model": MODEL,
                 "messages": [{"role": "user", "content": random.choice(QUESTIONS)}],

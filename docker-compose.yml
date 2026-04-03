@@ -117,6 +117,7 @@ services:
       - "/vllm_plugins/nano_v3_reasoning_parser.py"
       - "--reasoning-parser"
       - "nano_v3"
+      - "--enable-chunked-prefill"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
       # FP4 MoE kernel tuning — required for Nemotron-30B-NVFP4; harmless for other models
