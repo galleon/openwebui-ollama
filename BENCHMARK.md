@@ -11,20 +11,31 @@ separate machine (e.g. a Mac) while GPU-intensive services run on the rental nod
 [Brev](https://brev.nvidia.com) is NVIDIA's GPU cloud platform and the recommended
 way to rent an RTX Pro 6000 Blackwell for this benchmark.
 
-### Docker Registry Credentials
+### NGC authentication — why nvcr.io credentials are required
+
+The vLLM service uses NVIDIA's official NGC container image
+(`nvcr.io/nvidia/vllm:26.02-py3`). NGC is a private registry — unauthenticated pulls
+will fail with a `401 Unauthorized` error. You need a free NGC account and API key:
+
+1. Create an account at [ngc.nvidia.com](https://ngc.nvidia.com)
+2. Go to **Account → Setup → Generate API Key**
+3. Copy the key — you will use it as the password below
+
+### Docker Registry Credentials in Brev
 
 Brev lets you store Docker registry credentials once in the UI — they are injected at
-the daemon level on every instance. Add your NGC API key under
-**Account → Docker Registry Credentials**:
+the daemon level on every instance, so no manual `docker login` is needed on the node.
+
+Add your NGC key under **Account → Docker Registry Credentials**:
 
 | Field | Value |
 |---|---|
 | Registry | `nvcr.io` |
 | Username | `$oauthtoken` |
-| Password | Your NGC API key from [ngc.nvidia.com](https://ngc.nvidia.com) |
+| Password | Your NGC API key from step 2 above |
 
-No `docker login` needed on the instance — `docker compose pull` and `docker compose up`
-authenticate automatically.
+`docker compose pull` and `docker compose up` will authenticate automatically from
+that point on.
 
 ### HF model cache
 
