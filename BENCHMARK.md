@@ -69,6 +69,24 @@ brev port-forward <instance-name> \
 Then use `RTX_HOST=localhost` in the Open WebUI `docker run` command from
 [Topology B](#topology-b----open-webui-on-a-separate-machine-eg-mac).
 
+### Freeing port 8888 (Jupyter conflict)
+
+Brev instances run JupyterLab on port 8888 by default, managed by systemd.
+Open WebUI is configured to use port 8888 in `.env.rtx6000` (Brev's Cloudflare
+tunnel routes external traffic to this port). Stop Jupyter before starting the stack:
+
+```bash
+# Stop and disable the Jupyter systemd service
+sudo systemctl stop $(systemctl list-units --type=service | grep -i jupyter | awk '{print $1}')
+sudo systemctl disable $(systemctl list-units --type=service | grep -i jupyter | awk '{print $1}')
+
+# Confirm the port is free
+ss -tlnp | grep 8888   # should return nothing
+```
+
+> Jupyter will not restart after this — the service is disabled. If you need it back,
+> run `sudo systemctl enable --now <jupyter-service-name>`.
+
 ### Quick-start on the Brev instance
 
 ```bash
@@ -89,10 +107,17 @@ cp .env.rtx6000 .env
 # 4. Build GB10-specific images (Docling + Infinity)
 docker compose build docling embedder reranker
 
-# 5. Start
-docker compose --profile reranker \
+# 5. Free port 8888 (see above) then start everything
+docker compose --profile reranker --profile qdrant \
   -f docker-compose.yml -f docker-compose.rtx6000.yml up -d
+
+# 6. If Open WebUI was already running on a different port, force-recreate it
+docker compose --profile reranker --profile qdrant \
+  -f docker-compose.yml -f docker-compose.rtx6000.yml \
+  up -d --force-recreate open-webui
 ```
+
+Open WebUI is then accessible via the Brev instance URL on port 8888.
 
 ---
 
