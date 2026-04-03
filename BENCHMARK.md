@@ -76,9 +76,12 @@ Open WebUI is configured to use port 8888 in `.env.rtx6000` (Brev's Cloudflare
 tunnel routes external traffic to this port). Stop Jupyter before starting the stack:
 
 ```bash
-# Stop and disable the Jupyter systemd service
-sudo systemctl stop $(systemctl list-units --type=service | grep -i jupyter | awk '{print $1}')
-sudo systemctl disable $(systemctl list-units --type=service | grep -i jupyter | awk '{print $1}')
+# Find the exact Jupyter service name first
+systemctl list-units --type=service | grep -i jupyter
+
+# Then stop and disable it by name (replace <service-name> with the result above)
+sudo systemctl stop <service-name>
+sudo systemctl disable <service-name>
 
 # Confirm the port is free
 ss -tlnp | grep 8888   # should return nothing
@@ -90,6 +93,10 @@ ss -tlnp | grep 8888   # should return nothing
 ### Quick-start on the Brev instance
 
 ```bash
+# 0. Configure NVIDIA Container Toolkit (requires sudo)
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
 # 1. Clone the repo
 git clone https://github.com/galleon/openwebui-vllm.git
 cd openwebui-vllm
@@ -118,6 +125,23 @@ docker compose --profile reranker --profile qdrant \
 ```
 
 Open WebUI is then accessible via the Brev instance URL on port 8888.
+
+### Getting the Knowledge Base UUID
+
+The Open WebUI API returns the SvelteKit frontend for unauthenticated requests instead
+of a 401 error, which can make the `/api/knowledge` endpoint appear broken. The simplest
+way to get your KB UUID is directly from the browser URL — click on your knowledge base
+in Open WebUI and copy the UUID from the address bar:
+
+```
+http://<brev-url>/workspace/knowledge/<uuid-is-here>
+```
+
+Then set it in `.env`:
+
+```bash
+sed -i 's/^OPENWEBUI_KB_ID=.*/OPENWEBUI_KB_ID=<uuid>/' .env
+```
 
 ---
 
