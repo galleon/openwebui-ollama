@@ -6,6 +6,85 @@ separate machine (e.g. a Mac) while GPU-intensive services run on the rental nod
 
 ---
 
+## Renting on brev.nvidia.com
+
+[Brev](https://brev.nvidia.com) is NVIDIA's GPU cloud platform and the recommended
+way to rent an RTX Pro 6000 Blackwell for this benchmark.
+
+### Docker Registry Credentials
+
+Brev lets you store Docker registry credentials once in the UI — they are injected at
+the daemon level on every instance. Add your NGC API key under
+**Account → Docker Registry Credentials**:
+
+| Field | Value |
+|---|---|
+| Registry | `nvcr.io` |
+| Username | `$oauthtoken` |
+| Password | Your NGC API key from [ngc.nvidia.com](https://ngc.nvidia.com) |
+
+No `docker login` needed on the instance — `docker compose pull` and `docker compose up`
+authenticate automatically.
+
+### HF model cache
+
+Brev instance disk is ephemeral across restarts. To avoid re-downloading models on
+each session, point the HF cache at a path on the persistent volume Brev provides
+(typically `/home/ubuntu`):
+
+```env
+HF_CACHE_DIR=/home/ubuntu/hf_cache
+```
+
+### Port forwarding to your Mac (Topology B)
+
+To run Open WebUI on your Mac while GPU services run on the Brev instance, forward
+the service ports over SSH using the Brev CLI:
+
+```bash
+# Install Brev CLI on your Mac
+brew install brevdev/homebrew-brev/brev
+brev login
+
+# Forward all GPU service ports (run in a dedicated terminal, keep it open)
+brev port-forward <instance-name> \
+  --port 8000 \   # vLLM
+  --port 7997 \   # embedder
+  --port 7998 \   # reranker
+  --port 5001 \   # docling
+  --port 6333     # qdrant
+```
+
+Then use `RTX_HOST=localhost` in the Open WebUI `docker run` command from
+[Topology B](#topology-b----open-webui-on-a-separate-machine-eg-mac).
+
+### Quick-start on the Brev instance
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/galleon/openwebui-vllm.git
+cd openwebui-vllm
+git checkout bench/rtx-pro-6000
+
+# 2. Download the Nemotron reasoning parser
+mkdir -p ./vllm_plugins
+wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
+  https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
+
+# 3. Configure
+cp .env.rtx6000 .env
+# Edit .env — set WEBUI_SECRET_KEY, HUGGING_FACE_HUB_TOKEN, HF_CACHE_DIR
+
+# 4. Build GB10-specific images (Docling + Infinity)
+docker compose build docling embedder reranker
+
+# 5. Start
+docker compose --profile reranker \
+  -f docker-compose.yml -f docker-compose.rtx6000.yml up -d
+```
+
+---
+
 ## Component CPU / GPU mapping
 
 | Component | Compute | Reason |
