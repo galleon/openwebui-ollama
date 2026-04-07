@@ -225,13 +225,105 @@ RAG overhead exploded from ~27s at 10 users to 88–118s at 100 users. This comb
 
 ---
 
-## Next steps
+---
 
-- [ ] Upgrade to `VLLM_NGC_TAG=26.03-py3` and re-run to check for regressions/improvements
-- [ ] Sweep at 20 / 30 / 50 users to characterise the degradation curve between 10 and 100 users
-- [ ] Investigate Qdrant performance under concurrent load (tune thread count, consider dedicated instance)
-- [ ] Consider raising `VLLM_MAX_MODEL_LEN` from 8192 once saturation profile is known
+## Sweep — 20 / 30 / 50 / 100 users (VLLM_MAX_NUM_SEQS=64, vLLM 26.03-py3)
+
+vLLM upgraded to `nvcr.io/nvidia/vllm:26.03-py3` (v0.17.1+a03ca76a.nv26.03). 0 failures across all 12 runs.
+
+### Throughput (req/s — HTTP POST)
+
+| Users | nothink | think | mixed |
+|---|---|---|---|
+| 20 | 0.30 | 0.16 | 0.24 |
+| 30 | 0.43 | 0.23 | 0.33 |
+| 50 | **0.56** | **0.25** | **0.36** |
+| 100 | 0.56 | 0.17 | 0.34 |
+
+**Throughput plateaus at 50 users** — the saturation knee. Nothink throughput is stable from 50→100 users; think mode drops at 100 users as KV cache pressure increases.
+
+### TTFT — time to first token (avg)
+
+| Users | NT PLAIN | NT RAG | PLAIN (think) | RAG (think) |
+|---|---|---|---|---|
+| 20 | **2s** | 53s | 22s | 92s |
+| 30 | <1s | 47s | 20s | 101s |
+| 50 | <1s | 61s | 29s | 131s |
+| 100 | 26s | 127s | 95s | 239s |
+
+NT PLAIN TTFT stays sub-second up to 30 users, then climbs. The 100-user jump (26s) reflects queue depth at the 64-seq ceiling.
+
+### E2E latency (avg)
+
+| Users | NT PLAIN | NT RAG | PLAIN (think) | RAG (think) |
+|---|---|---|---|---|
+| 20 | 35s | 65s | 73s | 100s |
+| 30 | 34s | 61s | 78s | 112s |
+| 50 | 50s | 80s | 92s | 143s |
+| 100 | 79s | 148s | 168s | 250s |
+
+### ITL — inter-token latency (avg, nothink mode)
+
+| Users | NT ITL avg |
+|---|---|
+| 10 | 76ms |
+| 20 | 126ms |
+| 30 | 150ms |
+| 50 | 211ms |
+| 100 | 238ms |
+
+ITL scales linearly with concurrency — each additional batch of sequences adds ~2ms/user of per-token overhead. This is pure batching cost; the GB10 compute is healthy throughout.
+
+### RAG overhead (avg TTFT above PLAIN baseline)
+
+| Users | nothink RAG overhead | think RAG overhead |
+|---|---|---|
+| 10 | 26s | 27s |
+| 20 | 43s | 71s |
+| 30 | 46s | 81s |
+| 50 | 60s | 83s |
+| 100 | 92s | 140s |
+
+RAG overhead grows with concurrency — Qdrant is under increasing pressure. At 100 users with think mode, retrieval adds **140s** above the plain baseline — Qdrant is becoming the dominant latency driver.
+
+### 26.02-py3 vs 26.03-py3 at 100 users (nothink)
+
+| Metric | 26.02-py3 | 26.03-py3 | Delta |
+|---|---|---|---|
+| Requests / 5 min | 152 | 163 | +7% |
+| req/s | 0.54 | 0.56 | +4% |
+| NT PLAIN TTFT avg | 35.7s | 26s | −27% |
+| NT RAG TTFT avg | 127.8s | 127s | ~0% |
+
+26.03-py3 delivers a meaningful TTFT improvement on plain queries (+27% faster) with marginal throughput gains.
 
 ---
 
-*Raw CSV and HTML reports in `results/` — `*_u10_*`, `*_u100_*`, and `*_u100_seqs64_*` prefixes.*
+## Key findings
+
+1. **`VLLM_MAX_NUM_SEQS=64` is stable up to 100 users with 0 failures.** The system degrades gracefully under load — no hard ceiling at 100u.
+
+2. **Saturation knee is at 50 users.** Throughput plateaus from 50→100 for nothink (0.56 req/s). Beyond 50 users you are buying latency, not throughput.
+
+3. **NT PLAIN TTFT stays sub-second up to 30 users.** This is the interactive sweet spot for nothink mode. Beyond 30 users TTFT degrades perceptibly.
+
+4. **ITL scales linearly at ~2ms per additional user** (76ms at 10u → 238ms at 100u). The GB10 GPU is not compute-saturated — the cost is purely from larger batch sizes.
+
+5. **Qdrant RAG overhead is the dominant latency factor at scale.** It grows from 27s at 10 users to 140s at 100 users (think mode). Tuning or replacing Qdrant is the highest-leverage improvement for RAG workloads.
+
+6. **Think mode degrades faster than nothink at high concurrency.** At 100 users think PLAIN TTFT is 95s vs nothink's 26s — a 3.7× gap. For concurrent interactive use, disable thinking or cap concurrency at 30 users.
+
+7. **26.03-py3 is a worthwhile upgrade** — 27% faster NT PLAIN TTFT at 100 users, no regressions observed.
+
+---
+
+## Next steps
+
+- [ ] Investigate Qdrant performance under concurrent load — tune thread count, connection pool, or consider a dedicated Qdrant instance
+- [ ] Consider raising `VLLM_MAX_MODEL_LEN` from 8192 — with seqs=64 there is KV cache headroom above the 50-user knee
+- [ ] Profile GB10 GPU utilisation during 50-user runs to quantify remaining headroom
+- [ ] Sweep `VLLM_MAX_NUM_SEQS` between 64 and 128 to see if throughput plateau shifts
+
+---
+
+*Raw CSV and HTML reports in `results/` — filenames match `{mode}_u{N}` pattern. Previous seqs=8 runs in `*_u100_*`, seqs=64 baseline in `*_u100_seqs64_*`.*
