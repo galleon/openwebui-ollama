@@ -372,9 +372,15 @@ Edit `bench_questions.json` to match your knowledge base content:
 
 ### Get your Knowledge Base UUID
 
+Note the trailing slash — `/api/v1/knowledge/` is the API endpoint; without it
+Open WebUI's router returns the HTML frontend instead of JSON.
+
+Also source `.env` first so the variable is available in the shell:
+
 ```bash
-curl -s http://localhost:3000/api/v1/knowledge \
-  -H "Authorization: Bearer $OPENWEBUI_API_KEY" | jq '.[].id'
+source .env
+curl -s http://localhost:3000/api/v1/knowledge/ \
+  -H "Authorization: Bearer $OPENWEBUI_API_KEY" | jq '.items[] | {name: .name, id: .id}'
 ```
 
 ### Run

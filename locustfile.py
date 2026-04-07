@@ -18,8 +18,17 @@ Metrics reported per request (separate rows in stats table / CSV):
   E2E           — total end-to-end latency (ms)
   RAG overhead  — TTFT(RAG) − TTFT(PLAIN): time spent on retrieval (ms)
 
-Both a RAG task (with knowledge base) and a PLAIN task (bare chat) are run
-so every metric has a paired comparison.
+Four task variants are run so every metric has a full comparison matrix:
+
+  RAG           — knowledge-base retrieval, thinking enabled  (weight 3)  @tag think
+  PLAIN         — bare chat, thinking enabled                 (weight 1)  @tag think
+  NT RAG        — knowledge-base retrieval, thinking disabled (weight 3)  @tag nothink
+  NT PLAIN      — bare chat, thinking disabled                (weight 1)  @tag nothink
+
+Thinking is disabled via chat_template_kwargs {"enable_thinking": false},
+handled by the nano_v3 reasoning parser plugin.
+
+Use -T think or -T nothink to run a single mode in isolation.
 
 Configuration — reads from .env in the same directory, then environment:
   OPENWEBUI_API_KEY    Bearer token         required
@@ -51,7 +60,7 @@ from pathlib import Path
 from typing import Generator
 
 from dotenv import load_dotenv
-from locust import HttpUser, between, task
+from locust import HttpUser, between, tag, task
 from locust.exception import StopUser
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
@@ -110,7 +119,10 @@ def _iter_tokens(response) -> Generator[tuple[str, int | None], None, None]:
         if usage:
             completion_tokens = usage.get("completion_tokens")
         try:
-            content = chunk["choices"][0]["delta"].get("content") or ""
+            delta = chunk["choices"][0]["delta"]
+            # Prefer content (answer tokens); fall back to reasoning_content for
+            # nothink mode where the parser streams the answer there instead.
+            content = delta.get("content") or delta.get("reasoning_content") or ""
         except (KeyError, IndexError):
             content = ""
         if content:
@@ -129,8 +141,10 @@ def _percentile(data: list[float], p: float) -> float:
 
 
 # Shared TTFT store for RAG-overhead computation (per-worker approximation)
-_last_plain_ttft: float | None = None
-_last_rag_ttft:   float | None = None
+_last_plain_ttft:    float | None = None
+_last_rag_ttft:      float | None = None
+_last_nt_plain_ttft: float | None = None
+_last_nt_rag_ttft:   float | None = None
 
 
 # ── Locust user ───────────────────────────────────────────────────────────────
@@ -182,7 +196,7 @@ class OpenWebUIUser(HttpUser):
           {prefix} TPS     — ms-per-output-token (lower = faster)
           {prefix} E2E     — total latency (ms)
         """
-        global _last_plain_ttft, _last_rag_ttft
+        global _last_plain_ttft, _last_rag_ttft, _last_nt_plain_ttft, _last_nt_rag_ttft
 
         t_start = time.perf_counter()
         ttft_ms: float | None = None
@@ -241,14 +255,19 @@ class OpenWebUIUser(HttpUser):
             _last_plain_ttft = ttft_ms
         elif prefix == "RAG":
             _last_rag_ttft = ttft_ms
+        elif prefix == "NT PLAIN":
+            _last_nt_plain_ttft = ttft_ms
+        elif prefix == "NT RAG":
+            _last_nt_rag_ttft = ttft_ms
 
         return ttft_ms
 
     # ── tasks ─────────────────────────────────────────────────────────────────
 
+    @tag("think")
     @task(3)
     def rag_query(self) -> None:
-        """Chat completion with knowledge-base retrieval."""
+        """RAG query with thinking enabled."""
         rag_ttft = self._stream_query(
             endpoint="/api/chat/completions",
             payload={
@@ -263,11 +282,12 @@ class OpenWebUIUser(HttpUser):
             overhead = max(0.0, rag_ttft - _last_plain_ttft)
             self._fire("RAG overhead", "retrieval_overhead_vs_plain", overhead)
 
+    @tag("think")
     @task(1)
     def plain_query(self) -> None:
-        """Plain chat completion without RAG — baseline for comparison."""
+        """Plain chat completion with thinking enabled — baseline."""
         self._stream_query(
-            endpoint="/openai/v1/chat/completions",
+            endpoint="/api/chat/completions",
             payload={
                 "model": MODEL,
                 "messages": [{"role": "user", "content": random.choice(QUESTIONS)}],
@@ -275,3 +295,42 @@ class OpenWebUIUser(HttpUser):
             },
             prefix="PLAIN",
         )
+
+    @tag("nothink")
+    @task(3)
+    def rag_query_nothink(self) -> None:
+        """RAG query with thinking disabled."""
+        nt_rag_ttft = self._stream_query(
+            endpoint="/api/chat/completions",
+            payload={
+                "model": MODEL,
+                "messages": [{"role": "user", "content": random.choice(QUESTIONS)}],
+                "files": [{"type": "collection", "id": KB_ID}],
+                "stream": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            prefix="NT RAG",
+        )
+        if nt_rag_ttft is not None and _last_nt_plain_ttft is not None:
+            overhead = max(0.0, nt_rag_ttft - _last_nt_plain_ttft)
+            self._fire("NT RAG overhead", "retrieval_overhead_vs_nt_plain", overhead)
+
+    @tag("nothink")
+    @task(1)
+    def plain_query_nothink(self) -> None:
+        """Plain chat completion with thinking disabled — throughput ceiling."""
+        self._stream_query(
+            endpoint="/api/chat/completions",
+            payload={
+                "model": MODEL,
+                "messages": [{"role": "user", "content": random.choice(QUESTIONS)}],
+                "stream": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            prefix="NT PLAIN",
+        )
+
+
+if __name__ == "__main__":
+    import locust.main
+    locust.main.main()
