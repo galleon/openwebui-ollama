@@ -20,7 +20,8 @@
 
 ## Methodology
 
-Benchmarked with `locustfile.py` using **10 concurrent users**, ramp 2/s, 5-minute steady-state window (`--reset-stats`).
+Benchmarked with `locustfile.py`, 5-minute steady-state window (`--reset-stats`) per run.
+Two load levels tested: **10 users** (ramp 2/s) and **100 users** (ramp 5/s).
 
 Three runs, in order:
 
@@ -93,25 +94,60 @@ The elevated NT RAG TPS reflects that nothink responses are counted via `reasoni
 
 ---
 
+## Results — 100 users
+
+> **Stack saturated.** `VLLM_MAX_NUM_SEQS=8` limits vLLM to 8 concurrent sequences. With 100 users, 92 requests queue immediately and hit the 120s client timeout.
+
+### Failure rates
+
+| Run | Requests | Failures | Failure rate |
+|---|---|---|---|
+| nothink | 122 | 110 | **90%** |
+| think | 153 | 153 | **100%** |
+| mixed | 144 | 144 | **100%** |
+
+All failures are `ReadTimeoutError` at the 120s client timeout (`HTTP 0`). No RAG requests completed in think or mixed runs.
+
+### nothink — only partial data captured
+
+The 12 NT PLAIN requests that completed before the queue filled provide a pre-saturation snapshot:
+
+| Metric | 10 users | 100 users |
+|---|---|---|
+| NT PLAIN TTFT avg | 2.2s | **56.7s** |
+| NT PLAIN TTFT p50 | 1.6s | 65s |
+| NT PLAIN ITL avg | 76ms | 74ms |
+| NT PLAIN TPS avg | 22ms/tok | 129ms/tok |
+
+TTFT degraded **26×** while ITL remained stable — confirming the bottleneck is queue wait time before vLLM picks up the request, not GPU generation speed once started.
+
+### think / mixed — complete timeout
+
+Every request timed out. vLLM's thinking token generation at `VLLM_MAX_NUM_SEQS=8` cannot serve 100 concurrent users within any reasonable timeout.
+
+---
+
 ## Key findings
 
 1. **Disable thinking for high-concurrency workloads.** At 10 users, nothink gives 2.2× throughput and 4× faster plain TTFT with no meaningful ITL regression.
 
-2. **Qdrant is the RAG bottleneck.** The 26–27s retrieval overhead is consistent across modes. As user count increases, Qdrant saturation will likely surface before vLLM does.
+2. **`VLLM_MAX_NUM_SEQS=8` is the hard concurrency ceiling.** At 100 users it causes complete saturation. Raising this is the highest-priority tuning action before re-testing at scale.
 
-3. **GPU generation throughput is healthy.** ITL of 68–76ms and TPS of 22–23ms/token on plain queries confirm the GB10 is not saturated at 10 users.
+3. **Qdrant is the RAG bottleneck at low concurrency.** The 26–27s retrieval overhead at 10 users dominates RAG TTFT. At higher concurrency, vLLM queue depth takes over as the primary bottleneck.
 
-4. **Mixed mode behaves as expected.** Think and nothink tasks coexist without measurable interference — KV cache pressure is within budget at 0.70 utilization.
+4. **GPU generation throughput is healthy.** ITL of 68–76ms is stable from 10 to 100 users — the GB10 has headroom. The problem is queue depth, not compute.
+
+5. **Saturation point is between 10 and 100 users.** A sweep at 20, 30, and 50 users is needed to characterise the degradation curve before tuning `VLLM_MAX_NUM_SEQS`.
 
 ---
 
 ## Next steps
 
-- [ ] Repeat suite at **100 users** to find saturation point
-- [ ] Monitor Qdrant under higher concurrent load (likely bottleneck)
-- [ ] Consider raising `VLLM_MAX_NUM_SEQS` above 8 for higher concurrency
+- [ ] Raise `VLLM_MAX_NUM_SEQS` (try 32 or 64) and re-run 100-user suite
+- [ ] Sweep at 20 / 30 / 50 users to find the saturation knee with current config
+- [ ] Investigate Qdrant latency under concurrent load (secondary bottleneck)
 - [ ] Consider raising `VLLM_MAX_MODEL_LEN` from 8192 once saturation profile is known
 
 ---
 
-*Raw CSV and HTML reports: `results/nothink_u10_stats.csv`, `results/think_u10_stats.csv`, `results/mixed_u10_stats.csv`*
+*Raw CSV and HTML reports in `results/` — `*_u10_*` and `*_u100_*` prefixes.*
