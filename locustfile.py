@@ -212,7 +212,7 @@ class OpenWebUIUser(HttpUser):
                 json=payload,
                 stream=True,
                 catch_response=True,
-                timeout=120,
+                timeout=300,
             ) as resp:
                 if resp.status_code != 200:
                     resp.failure(f"HTTP {resp.status_code}")

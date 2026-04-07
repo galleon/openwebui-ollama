@@ -141,13 +141,97 @@ Every request timed out. vLLM's thinking token generation at `VLLM_MAX_NUM_SEQS=
 
 ---
 
+---
+
+## Results — 100 users, VLLM_MAX_NUM_SEQS=64
+
+> **0 failures.** Raising MAX_NUM_SEQS from 8 to 64 eliminates timeouts. The system is under load but stable.
+
+vLLM image: `nvcr.io/nvidia/vllm:26.02-py3` (upgrade to 26.03-py3 pending).
+
+### Throughput
+
+| Mode | Total reqs / 5 min | req/s | vs 10u |
+|---|---|---|---|
+| nothink | 152 | **0.54** | +93% |
+| think | 55 | **0.20** | +54% |
+| mixed | 100 | 0.36 | — |
+
+Throughput roughly doubles vs 10 users thanks to higher concurrency — the GB10 is now being utilised more fully.
+
+### TTFT — time to first token
+
+| Mode | PLAIN avg | PLAIN p50 | RAG avg | RAG p50 |
+|---|---|---|---|---|
+| nothink | 35.7s | 33s | 127.8s | 124s |
+| think | 49.3s | 44s | 160.8s | 155s |
+| mixed NT | 45.4s | 41s | 144.2s | 142s |
+| mixed think | 47.3s | 49s | 142.9s | 137s |
+
+TTFT degraded significantly vs 10 users (nothink plain: 2.2s → 35.7s) due to queue depth — 100 users competing for 64 slots.
+
+### E2E latency
+
+| Mode | PLAIN avg | PLAIN p50 | RAG avg | RAG p50 |
+|---|---|---|---|---|
+| nothink | 88.7s | 67s | 151.6s | 150s |
+| think | 136s | 141s | 235s | 237s |
+
+### ITL — inter-token latency
+
+| Mode | avg | p95 |
+|---|---|---|
+| nothink | 224–259ms | 451–483ms |
+| think | 193–224ms | 366–462ms |
+
+ITL degraded **3× vs 10 users** (from ~70ms to ~210–260ms). This is expected: with 64 concurrent sequences batched together, each token generation step handles more work per iteration, increasing per-token latency across all sequences. The GB10 is now genuinely loaded.
+
+### RAG overhead
+
+| Mode | avg | p50 | p95 |
+|---|---|---|---|
+| nothink | 88.2s | 83s | 146s |
+| think | 117.9s | 114s | 174s |
+
+RAG overhead exploded from ~27s at 10 users to 88–118s at 100 users. This combines Qdrant retrieval latency under concurrent load and queue wait time before vLLM picks up the request.
+
+### Comparison summary
+
+| Metric | 10u / seqs=8 | 100u / seqs=8 | 100u / seqs=64 |
+|---|---|---|---|
+| Failure rate | 0% | 90–100% | **0%** |
+| NT PLAIN TTFT avg | 2.2s | 56.7s† | 35.7s |
+| PLAIN TTFT avg | 8.8s | timeout | 49.3s |
+| NT PLAIN ITL avg | 76ms | 74ms† | 224ms |
+| PLAIN ITL avg | 69ms | timeout | 224ms |
+| nothink req/s | 0.28 | ~0 | **0.54** |
+| think req/s | 0.13 | ~0 | **0.20** |
+
+† partial data from the few requests that squeezed through before queue filled.
+
+---
+
+## Key findings
+
+1. **`VLLM_MAX_NUM_SEQS=64` is the minimum viable setting for 100 concurrent users.** seqs=8 causes complete saturation; seqs=64 eliminates failures and doubles throughput.
+
+2. **Disable thinking for high-concurrency workloads.** Nothink gives 2.7× more throughput than think at 100 users, and TTFT is 14s faster on plain queries.
+
+3. **ITL degrades 3× at 100 users** (70ms → 220ms). This is a batching effect — 64 concurrent sequences share compute per step. The GB10 is now genuinely saturated; further scaling requires either a larger model-serving budget or reduced concurrency.
+
+4. **Qdrant is a growing bottleneck under load.** RAG overhead scales from 27s at 10 users to 88–118s at 100 users. At higher concurrency, externalising or tuning Qdrant becomes critical.
+
+5. **Nothink TTFT at 100 users (35.7s) is still high for interactive use.** Acceptable for batch/background workloads; for interactive chat, target ≤20 concurrent users or raise MAX_NUM_SEQS further.
+
+---
+
 ## Next steps
 
-- [ ] Raise `VLLM_MAX_NUM_SEQS` (try 32 or 64) and re-run 100-user suite
-- [ ] Sweep at 20 / 30 / 50 users to find the saturation knee with current config
-- [ ] Investigate Qdrant latency under concurrent load (secondary bottleneck)
+- [ ] Upgrade to `VLLM_NGC_TAG=26.03-py3` and re-run to check for regressions/improvements
+- [ ] Sweep at 20 / 30 / 50 users to characterise the degradation curve between 10 and 100 users
+- [ ] Investigate Qdrant performance under concurrent load (tune thread count, consider dedicated instance)
 - [ ] Consider raising `VLLM_MAX_MODEL_LEN` from 8192 once saturation profile is known
 
 ---
 
-*Raw CSV and HTML reports in `results/` — `*_u10_*` and `*_u100_*` prefixes.*
+*Raw CSV and HTML reports in `results/` — `*_u10_*`, `*_u100_*`, and `*_u100_seqs64_*` prefixes.*

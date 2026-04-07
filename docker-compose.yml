@@ -83,7 +83,7 @@ services:
   #   wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
   #     https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
   vllm:
-    image: nvcr.io/nvidia/vllm:${VLLM_NGC_TAG:-26.02-py3}
+    image: nvcr.io/nvidia/vllm:${VLLM_NGC_TAG:-26.03-py3}
     container_name: vllm
     restart: unless-stopped
     ports:
