@@ -104,7 +104,7 @@ services:
       - "--max-model-len"
       - "${VLLM_MAX_MODEL_LEN:-32768}"
       - "--gpu-memory-utilization"
-      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.70}"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
       - "--max-num-seqs"
       - "${VLLM_MAX_NUM_SEQS:-8}"
       - "--kv-cache-dtype"
