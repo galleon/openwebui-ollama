@@ -112,7 +112,7 @@ RAG queries attach the Nürburgring knowledge base (8 domain-specific questions,
 **Date:** 2026-04-08
 **Model:** `Qwen/Qwen3.5-35B-A3B-FP8`
 **Raw CSVs:** `results/dgx-spark-gb10/qwen3.5-35b-fp8/`
-**Reasoning parser:** `deepseek_r1` (built-in — no plugin required)
+**Reasoning parser:** `qwen3` (built-in — no plugin required)
 
 > **Think mode limitation:** With `VLLM_MAX_MODEL_LEN=8192`, Qwen3.5 in think mode generates reasoning chains long enough that most requests exceed the 5-minute benchmark window. At ≤30 users, zero think-mode requests complete; at 50–100 users only a handful complete. Think and mixed columns are marked `—` where throughput is effectively zero (< 0.06 req/s aggregated).
 

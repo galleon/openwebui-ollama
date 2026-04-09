@@ -107,7 +107,7 @@ if [[ "$PHASE" == "all" || "$PHASE" == "qwen" ]]; then
     switch_model \
         "Qwen/Qwen3.5-35B-A3B-FP8" \
         "/vllm_plugins/noop.py" \
-        "deepseek_r1" \
+        "qwen3" \
         "0" \
         "$QWEN_MAX_LEN"
     sweep "results/$TARGET/qwen3.5-35b-fp8"

@@ -31,7 +31,7 @@ vllm serve Qwen/Qwen3.5-35B-A3B-FP8 \
   --max-model-len 32768 \
   --max-num-seqs 8 \
   --kv-cache-dtype fp8 \
-  --reasoning-parser deepseek_r1 \
+  --reasoning-parser qwen3 \
   --enable-chunked-prefill \
   --trust-remote-code
 ```
@@ -44,7 +44,7 @@ vllm serve Qwen/Qwen3.5-35B-A3B-FP8 \
 | `--max-model-len` | `32768` | Minimum for Qwen3.5 think mode to produce completions; 8192 overflows |
 | `--max-num-seqs` | `8` | Conservative with 8 GB KV budget; raise to 32 once nothink baseline is established |
 | `--kv-cache-dtype` | `fp8` | Halves KV memory vs fp16 — essential on this hardware |
-| `--reasoning-parser` | `deepseek_r1` | Built-in; no plugin file needed (unlike Nemotron) |
+| `--reasoning-parser` | `qwen3` | Built-in; no plugin file needed (unlike Nemotron) |
 | `--enable-chunked-prefill` | — | Improves throughput under concurrent load |
 
 ### Parameter tradeoffs
@@ -65,7 +65,7 @@ MAX_MODEL_LEN   MAX_NUM_SEQS   Think mode?   Expected ITL
 
 - **No FP4 kernels** — do NOT set `VLLM_USE_FLASHINFER_MOE_FP4=1`. That flag is for
   Nemotron NVFP4 models only; it will degrade or crash Qwen3.5-FP8.
-- **No plugin needed** — `deepseek_r1` is built into vLLM. You do not need
+- **No plugin needed** — `qwen3` is built into vLLM. You do not need
   `nano_v3_reasoning_parser.py` or any `--reasoning-parser-plugin` flag.
 - **Nothink via chat_template_kwargs** — thinking is disabled per-request by the benchmark
   client using `"chat_template_kwargs": {"enable_thinking": false}`. No server-side change
@@ -118,7 +118,7 @@ to use:
     --max-num-seqs  8
     --gpu-memory-utilization 0.90
     --kv-cache-dtype fp8
-    --reasoning-parser deepseek_r1
+    --reasoning-parser qwen3
 ════════════════════════════════════════════════════════════
   Press Enter once vLLM is running and healthy, or 's' to skip this combo:
 ```

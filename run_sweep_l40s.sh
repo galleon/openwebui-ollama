@@ -113,7 +113,7 @@ run_combo() {
     echo "    --max-num-seqs  $max_seqs"
     echo "    --gpu-memory-utilization 0.90   (recommended for L40S 48 GB GDDR6)"
     echo "    --kv-cache-dtype fp8"
-    echo "    --reasoning-parser deepseek_r1  (no plugin needed for Qwen3.5)"
+    echo "    --reasoning-parser qwen3  (no plugin needed for Qwen3.5)"
     echo "════════════════════════════════════════════════════════════"
 
     if $DRY_RUN; then

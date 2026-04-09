@@ -85,7 +85,7 @@ services:
   #     https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
   #   cp .env.nemotron-nano .env
   #
-  # Qwen3.5 — uses built-in deepseek_r1 parser, no plugin needed:
+  # Qwen3.5 — uses built-in qwen3 parser, no plugin needed:
   #   cp .env.qwen3.5-35b-fp8 .env
   vllm:
     image: nvcr.io/nvidia/vllm:${VLLM_NGC_TAG:-26.03-py3}
