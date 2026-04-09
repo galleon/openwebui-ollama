@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Full benchmark sweep — supports multiple hardware targets.
 # Usage: bash run_sweep.sh [TARGET [PHASE]]
-#   TARGET: dgx-spark-gb10 (default) | rtx-pro-6000
+#   TARGET: dgx-spark-gb10 (default) | rtx-pro-6000 | l40s
 #   PHASE:  all (default) | nemotron | qwen
 #
 # Prerequisites:
-#   - .env already configured for the target hardware (cp .env.<TARGET>.nemotron-nano .env)
+#   - .env already configured for the target hardware (cp .env.<TARGET>.* .env)
 #   - OPENWEBUI_API_KEY and OPENWEBUI_KB_ID set in .env
 #   - vLLM container healthy before running
 #   - uv installed
@@ -21,14 +21,25 @@ case "$TARGET" in
     GPU_MEM=0.70
     NEMOTRON_MAX_LEN=8192
     QWEN_MAX_LEN=32768   # raised from 8192 — Qwen3.5 think chains overflow at 8192
+    USER_LADDER=(10 20 30 50 100)
+    RAMP_LADDER=(2  2  5  5  10)
     ;;
   rtx-pro-6000)
     GPU_MEM=0.55
     NEMOTRON_MAX_LEN=16384
     QWEN_MAX_LEN=16384
+    USER_LADDER=(10 20 30 50 100)
+    RAMP_LADDER=(2  2  5  5  10)
+    ;;
+  l40s)
+    GPU_MEM=0.90
+    NEMOTRON_MAX_LEN=8192
+    QWEN_MAX_LEN=8192    # KV budget ~8 GB on L40S — keep context short
+    USER_LADDER=(5 10 15 20 30)
+    RAMP_LADDER=(1  2  2  2   5)
     ;;
   *)
-    echo "Unknown target: $TARGET. Valid values: dgx-spark-gb10, rtx-pro-6000" >&2
+    echo "Unknown target: $TARGET. Valid values: dgx-spark-gb10, rtx-pro-6000, l40s" >&2
     exit 1
     ;;
 esac
@@ -64,11 +75,9 @@ sweep() {
     local outdir=$1
     mkdir -p "$outdir"
     for tag in nothink think mixed; do
-        run_locust "$tag" 10  2 "$outdir"
-        run_locust "$tag" 20  2 "$outdir"
-        run_locust "$tag" 30  5 "$outdir"
-        run_locust "$tag" 50  5 "$outdir"
-        run_locust "$tag" 100 10 "$outdir"
+        for i in "${!USER_LADDER[@]}"; do
+            run_locust "$tag" "${USER_LADDER[$i]}" "${RAMP_LADDER[$i]}" "$outdir"
+        done
     done
 }
 
@@ -94,32 +103,45 @@ switch_model() {
 
 # ── Phase 1: Nemotron ─────────────────────────────────────────────────────────
 
-if [[ "$PHASE" == "all" || "$PHASE" == "nemotron" ]]; then
+if [[ "$TARGET" != "l40s" ]] && [[ "$PHASE" == "all" || "$PHASE" == "nemotron" ]]; then
     echo "=== [$TARGET] Phase 1: Nemotron-3-Nano-30B-A3B-NVFP4 ==="
     wait_healthy vllm
     sweep "results/$TARGET/nemotron-nano"
 fi
 
-# ── Phase 2: Qwen3.5-35B-A3B-FP8 ────────────────────────────────────────────
+# ── Phase 2: Qwen3.5 ─────────────────────────────────────────────────────────
 
 if [[ "$PHASE" == "all" || "$PHASE" == "qwen" ]]; then
-    echo "=== [$TARGET] Phase 2: Qwen3.5-35B-A3B-FP8 ==="
-    switch_model \
-        "Qwen/Qwen3.5-35B-A3B-FP8" \
-        "/vllm_plugins/noop.py" \
-        "qwen3" \
-        "0" \
-        "$QWEN_MAX_LEN"
-    sweep "results/$TARGET/qwen3.5-35b-fp8"
+    if [[ "$TARGET" == "l40s" ]]; then
+        QWEN_MODEL="Qwen/Qwen3.5-35B-A3B-FP8"
+        QWEN_PARSER="qwen3"
+        QWEN_FP4="0"
+        QWEN_OUTDIR="results/$TARGET/qwen3.5-35b-fp8"
+    else
+        QWEN_MODEL="AxionML/Qwen3.5-35B-A3B-NVFP4"
+        QWEN_PARSER="qwen3"
+        QWEN_FP4="1"
+        QWEN_OUTDIR="results/$TARGET/qwen3.5-35b-nvfp4"
+    fi
 
-    # ── Phase 3: restore Nemotron ─────────────────────────────────────────────
-    echo "=== [$TARGET] Phase 3: restoring Nemotron ==="
-    switch_model \
-        "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4" \
-        "/vllm_plugins/nano_v3_reasoning_parser.py" \
-        "nano_v3" \
-        "1" \
-        "$NEMOTRON_MAX_LEN"
+    echo "=== [$TARGET] Phase 2: $QWEN_MODEL ==="
+    if [[ "$TARGET" == "l40s" ]]; then
+        wait_healthy vllm  # l40s starts already configured for Qwen FP8
+    else
+        switch_model "$QWEN_MODEL" "/vllm_plugins/noop.py" "$QWEN_PARSER" "$QWEN_FP4" "$QWEN_MAX_LEN"
+    fi
+    sweep "$QWEN_OUTDIR"
+
+    # ── Phase 3: restore Nemotron (non-l40s only) ─────────────────────────────
+    if [[ "$TARGET" != "l40s" ]]; then
+        echo "=== [$TARGET] Phase 3: restoring Nemotron ==="
+        switch_model \
+            "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4" \
+            "/vllm_plugins/nano_v3_reasoning_parser.py" \
+            "nano_v3" \
+            "1" \
+            "$NEMOTRON_MAX_LEN"
+    fi
 fi
 
 echo "=== sweep complete ==="
