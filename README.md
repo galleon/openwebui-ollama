@@ -1,13 +1,16 @@
-# Open WebUI + vLLM + Docling on DGX Spark
+# Open WebUI + vLLM + Docling on Blackwell
 
-Local AI stack optimised for the **NVIDIA DGX Spark (GB10 / Blackwell sm_121)**.
+Local AI stack for **NVIDIA Blackwell GPUs**, tested on:
+- **DGX Spark (GB10)** — 128 GB unified memory
+- **RTX Pro 6000 Blackwell** — 96 GB GDDR7
+
 vLLM is the sole inference backend; [Infinity](https://github.com/michaelfeil/infinity) handles embeddings.
 Ollama is not used.
 
 | Service | Image | Port | Profile |
 |---|---|---|---|
 | Open WebUI | `ghcr.io/open-webui/open-webui:main` | 3000 | *(always on)* |
-| vLLM | `nvcr.io/nvidia/vllm:26.02-py3` | 8000 | *(always on)* |
+| vLLM | `nvcr.io/nvidia/vllm:${VLLM_NGC_TAG}` | 8000 | *(always on)* |
 | Embedder | custom (NGC PyTorch 26.01 base) | 7997 | *(always on)* |
 | Docling | custom (NGC PyTorch 26.01 base) | 5001 | *(always on)* |
 | Reranker | custom (NGC PyTorch 26.01 base) | 7998 | `reranker` |
@@ -29,29 +32,176 @@ Ollama is not used.
 
 ## Quick start
 
-```bash
-# 1. Configure environment
-cp .env.example .env
-#    Edit .env — set WEBUI_SECRET_KEY, VLLM_MODEL, and HUGGING_FACE_HUB_TOKEN
+Hardware-specific preset files are provided for each supported GPU + model combination:
 
-# 2. Download the Nemotron reasoning parser (required for all Nemotron-Nano models)
+| File | Hardware | Model |
+|---|---|---|
+| `.env.dgx-spark-gb10.nemotron-nano` | DGX Spark GB10 | Nemotron-3-Nano-30B-A3B-NVFP4 |
+| `.env.dgx-spark-gb10.qwen3.5-35b-fp8` | DGX Spark GB10 | Qwen3.5-35B-A3B-FP8 |
+| `.env.rtx-pro-6000.nemotron-nano` | RTX Pro 6000 Blackwell | Nemotron-3-Nano-30B-A3B-NVFP4 |
+| `.env.rtx-pro-6000.qwen3.5-35b-fp8` | RTX Pro 6000 Blackwell | Qwen3.5-35B-A3B-FP8 |
+
+```bash
+# 1. Copy the preset for your hardware and model
+cp .env.dgx-spark-gb10.nemotron-nano .env
+#    Fill in: WEBUI_SECRET_KEY, HUGGING_FACE_HUB_TOKEN, and (for benchmarking)
+#             OPENWEBUI_API_KEY and OPENWEBUI_KB_ID
+
+# 2. Download the Nemotron reasoning parser (required for Nemotron-Nano models)
 mkdir -p ./vllm_plugins
 wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
   https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
 
-# 3. Build the GB10-compatible images (Docling + Infinity)
+# 3. Build the Blackwell-compatible images (Docling + Infinity)
 #    vLLM uses the official NGC image — no build needed for it
 docker compose build docling embedder
 
 # 4. Start everything
-#    vLLM pulls nvcr.io/nvidia/vllm:26.02-py3 then downloads VLLM_MODEL from HF
+#    vLLM downloads VLLM_MODEL from HF on first run (~15 min for 30B)
 docker compose up -d
 
-# 5. Open the UI — vLLM models appear automatically once healthy (~15 min for 30B)
+# 5. Open the UI
 open http://localhost:3000
 ```
 
 Docling UI (for testing document extraction): http://localhost:5001/ui
+
+---
+
+## Deploying on Brev (brev.nvidia.com)
+
+[Brev](https://brev.nvidia.com) is NVIDIA's GPU cloud platform and the recommended
+way to rent an RTX Pro 6000 Blackwell for benchmarking.
+
+### NGC authentication
+
+vLLM uses NVIDIA's official NGC container image (`nvcr.io/nvidia/vllm:26.03-py3`).
+NGC is a private registry — unauthenticated pulls fail with `401 Unauthorized`.
+
+1. Create a free account at [ngc.nvidia.com](https://ngc.nvidia.com)
+2. Go to **Account → Setup → Generate API Key**
+3. In Brev, go to **Account → Docker Registry Credentials** and add:
+
+| Field | Value |
+|---|---|
+| Registry | `nvcr.io` |
+| Username | `$oauthtoken` |
+| Password | Your NGC API key |
+
+Credentials are injected at the daemon level — no manual `docker login` needed on the node.
+
+### HF model cache
+
+Brev instance disk is ephemeral across restarts. Point the HF cache at the persistent
+volume Brev provides (typically `/home/ubuntu`) to avoid re-downloading models:
+
+```env
+HF_CACHE_DIR=/home/ubuntu/hf_cache
+```
+
+### Freeing port 8888 (Jupyter conflict)
+
+Brev instances run JupyterLab on port 8888 via systemd, which conflicts with Open WebUI.
+Stop it before starting the stack:
+
+```bash
+# Find the exact service name first
+systemctl list-units --type=service | grep -i jupyter
+
+# Stop and disable it (replace <service-name> with the result above)
+sudo systemctl stop <service-name>
+sudo systemctl disable <service-name>
+
+# Confirm the port is free
+ss -tlnp | grep 8888   # should return nothing
+```
+
+### Quick-start on the Brev instance
+
+```bash
+# 0. Configure NVIDIA Container Toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# 1. Clone the repo
+git clone https://github.com/galleon/openwebui-vllm.git
+cd openwebui-vllm
+
+# 2. Download the Nemotron reasoning parser
+mkdir -p ./vllm_plugins
+wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
+  https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
+
+# 3. Configure
+cp .env.rtx-pro-6000.nemotron-nano .env
+# Edit .env — set WEBUI_SECRET_KEY, HUGGING_FACE_HUB_TOKEN, HF_CACHE_DIR
+
+# 4. Build Blackwell-compatible images
+docker compose build docling embedder reranker
+
+# 5. Start everything (with reranker and Qdrant)
+docker compose --profile reranker --profile qdrant up -d
+```
+
+Open WebUI will be accessible via the Brev tunnel URL on port **8888**. The RTX
+preset sets `WEBUI_PORT=8888` specifically because Brev only exposes a limited set
+of ports externally — 8888 is available once Jupyter is stopped. If Open WebUI
+was already started on a different port, force-recreate it:
+
+```bash
+docker compose --profile reranker --profile qdrant up -d --force-recreate open-webui
+```
+
+### Port forwarding to a separate machine (Topology B)
+
+Open WebUI has no GPU dependency and can run on any machine (e.g. a Mac), pointing
+at the GPU services on the Brev node via SSH port forwarding.
+
+**On the Brev instance** — start everything except Open WebUI:
+
+```bash
+docker compose --profile reranker --profile qdrant \
+  up -d vllm embedder reranker docling qdrant
+```
+
+**Forward ports from your Mac** using the Brev CLI:
+
+```bash
+brew install brevdev/homebrew-brev/brev
+brev login
+brev port-forward <instance-name> \
+  --port 8000 \
+  --port 7997 \
+  --port 7998 \
+  --port 5001 \
+  --port 6333
+```
+
+**On your Mac** — run only Open WebUI, pointing at the forwarded ports:
+
+```bash
+docker run -d \
+  --name open-webui \
+  -p 3000:8080 \
+  -v open_webui_data:/app/backend/data \
+  -e OPENAI_API_BASE_URL=http://localhost:8000/v1 \
+  -e OPENAI_API_KEY=EMPTY \
+  -e CONTENT_EXTRACTION_ENGINE=docling \
+  -e DOCLING_SERVER_URL=http://localhost:5001 \
+  -e RAG_EMBEDDING_ENGINE=openai \
+  -e RAG_EMBEDDING_MODEL=BAAI/bge-m3 \
+  -e RAG_OPENAI_API_BASE_URL=http://localhost:7997 \
+  -e RAG_OPENAI_API_KEY=EMPTY \
+  -e ENABLE_RAG_HYBRID_SEARCH=true \
+  -e RAG_RERANKING_ENGINE=external \
+  -e RAG_EXTERNAL_RERANKER_URL=http://localhost:7998/rerank \
+  -e RAG_EXTERNAL_RERANKER_API_KEY=EMPTY \
+  -e VECTOR_DB=qdrant \
+  -e QDRANT_URI=http://localhost:6333 \
+  -e WEBUI_AUTH=true \
+  -e WEBUI_SECRET_KEY=<your-secret> \
+  ghcr.io/open-webui/open-webui:main
+```
 
 ---
 
@@ -78,30 +228,30 @@ Docling UI (for testing document extraction): http://localhost:5001/ui
 ## GB10 unified memory budget
 
 The GB10 has **128 GB unified memory** shared between CPU and GPU.
-With the default `VLLM_GPU_MEMORY_UTILIZATION=0.55` and Nemotron-3-Nano-30B-NVFP4:
+With the DGX preset (`VLLM_GPU_MEMORY_UTILIZATION=0.70`) and Nemotron-3-Nano-30B-NVFP4:
 
 | Component | Memory |
 |---|---|
 | vLLM model weights (30B NVFP4) | ~15 GB |
-| vLLM KV cache (fp8, 0.55 utilization) | ~55 GB |
+| vLLM KV cache (fp8, 0.70 utilization) | ~74 GB |
 | Embedder (bge-m3) | ~3 GB |
 | Docling (EasyOCR) | ~3 GB |
 | OS + Open WebUI | ~2 GB |
-| **Total** | **~78 GB** |
-| **Headroom** | **~50 GB** |
+| **Total** | **~97 GB** |
+| **Headroom** | **~31 GB** |
 
-Raise `VLLM_GPU_MEMORY_UTILIZATION` toward `0.70` for longer context windows;
+Lower `VLLM_GPU_MEMORY_UTILIZATION` to `0.55` to leave more headroom for the OS and other services;
 add the reranker (~2 GB) with `--profile reranker`.
 
 ---
 
 ## Why custom images for Docling and Infinity?
 
-The upstream `michaelfeil/infinity` and `docling-serve-cu128` images target **CUDA 12.x** and lack native `sm_121` kernels for the GB10 Blackwell architecture, causing runtime JIT compilation failures.
+The upstream `michaelfeil/infinity` and `docling-serve-cu128` images target **CUDA 12.x** and lack native `sm_121` kernels for Blackwell, causing runtime JIT compilation failures.
 
 `Dockerfile.docling` and `Dockerfile.infinity` build on `nvcr.io/nvidia/pytorch:26.01-py3` which ships **CUDA 13.1** with full `sm_121` support.
 
-vLLM uses NVIDIA's official NGC image (`nvcr.io/nvidia/vllm:26.02-py3`) which already includes Blackwell support — no custom build needed.
+vLLM uses NVIDIA's official NGC image (`nvcr.io/nvidia/vllm:26.03-py3`) which already includes Blackwell support — no custom build needed.
 
 ---
 
@@ -113,7 +263,8 @@ All tunables live in `.env`. Key ones:
 |---|---|---|
 | `WEBUI_SECRET_KEY` | *(must set)* | Change before first run |
 | `VLLM_MODEL` | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4` | Any HuggingFace model ID |
-| `VLLM_GPU_MEMORY_UTILIZATION` | `0.55` | See memory budget above |
+| `VLLM_NGC_TAG` | `26.03-py3` | NGC vLLM image tag |
+| `VLLM_GPU_MEMORY_UTILIZATION` | `0.70` | DGX preset; RTX Pro 6000 preset uses `0.55` |
 | `VLLM_MAX_MODEL_LEN` | `8192` | Context window in tokens |
 | `EMBEDDER_MODEL` | `BAAI/bge-m3` | Any sentence-transformers model |
 | `OMP_NUM_THREADS` | `8` | Grace CPU has 72 Arm cores |
@@ -169,7 +320,7 @@ QDRANT_API_KEY=<optional-key>
 DOCLING_SERVE_PIPELINE_OPTIONS__DO_OCR=false
 ```
 
-### Switch to upstream Docling image (no GB10 GPU support)
+### Switch to upstream Docling image (no Blackwell GPU support)
 
 Comment out the `build:` block in `docker-compose.yml` and replace with:
 
@@ -240,7 +391,7 @@ All knowledge bases, chat history, and user data live inside the `open_webui_dat
 - **Zero external dependencies** — fully self-contained, works immediately after `docker compose up`
 - **Low latency** — embedder and vector store are on the same host, no network round-trips for RAG
 - **Simple operations** — one machine to manage, backup, or wipe
-- **GPU-accelerated embeddings** — Infinity uses the GB10 GPU, much faster than CPU-based alternatives
+- **GPU-accelerated embeddings** — Infinity uses the GPU, much faster than CPU-based alternatives
 
 ### Cons for a 2-site HA setup
 
@@ -250,7 +401,7 @@ All knowledge bases, chat history, and user data live inside the `open_webui_dat
 | **No replication** | Documents uploaded on site A are invisible on site B |
 | **Local embedder** | Each site embeds independently — if embedding models diverge (version, config), vectors become incompatible across sites |
 | **Stateful Open WebUI volume** | User accounts, chat history, and settings are not synchronised; a user logging in on site B sees a different state than on site A |
-| **Single point of failure** | If the DGX Spark on one site goes down, that site loses the entire stack — there is no failover |
+| **Single point of failure** | If the GPU node on one site goes down, that site loses the entire stack — there is no failover |
 
 ### Improving the setup for HA / multi-site
 
@@ -339,6 +490,8 @@ docker compose down -v
 
 `locustfile.py` benchmarks the OpenWebUI stack under concurrent load and captures streaming-specific metrics that plain HTTP benchmarkers miss.
 
+**Results:** [`benchmark.md`](benchmark.md)
+
 ### Metrics
 
 | Metric | Description |
@@ -356,7 +509,7 @@ Each metric appears as a separate row in the Locust stats table and CSV, for bot
 
 Requires [uv](https://docs.astral.sh/uv/). Dependencies (`locust`, `python-dotenv`) are declared inline in the script and installed automatically on first run.
 
-Fill in the benchmarking section of `.env` (copied from `.env.example`):
+Fill in the benchmarking section of `.env`:
 
 ```env
 OPENWEBUI_API_KEY=<your-api-key>
@@ -394,6 +547,20 @@ curl -s http://localhost:3000/api/v1/knowledge/ \
   --headless -u 10 -r 2 --run-time 60s \
   --csv=results/bench
 ```
+
+### Full sweep (both models, multiple user levels)
+
+`run_sweep.sh` runs the complete benchmark matrix: nothink / think / mixed × 10 / 20 / 30 / 50 / 100 users for both Nemotron and Qwen3.5.
+
+```bash
+# DGX Spark GB10 (default)
+bash run_sweep.sh
+
+# RTX Pro 6000 Blackwell
+bash run_sweep.sh rtx-pro-6000
+```
+
+The script expects `.env` to already be configured for the target hardware (copy the appropriate preset), then switches the model automatically between Phase 1 (Nemotron) and Phase 2 (Qwen3.5) and restores Nemotron when done. Results are saved to `results/<target>/`.
 
 ### Interpreting results
 

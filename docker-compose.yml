@@ -77,11 +77,16 @@ services:
   # Model is loaded from HuggingFace Hub at startup — set VLLM_MODEL in .env.
   # Gated models (Llama, Mistral, …) require HUGGING_FACE_HUB_TOKEN.
   #
-  # Nemotron-Nano models require a custom reasoning parser plugin.
-  # Download it once before starting:
-  #   mkdir -p ./vllm_plugins
+  # Model switching — set VLLM_MODEL, VLLM_REASONING_PARSER, VLLM_REASONING_PARSER_PLUGIN
+  # and VLLM_USE_FLASHINFER_MOE_FP4 in .env (see preset files below).
+  #
+  # Nemotron-Nano — requires the custom nano_v3 plugin:
   #   wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
   #     https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
+  #   cp .env.nemotron-nano .env
+  #
+  # Qwen3.5 — uses built-in deepseek_r1 parser, no plugin needed:
+  #   cp .env.qwen3.5-35b-fp8 .env
   vllm:
     image: nvcr.io/nvidia/vllm:${VLLM_NGC_TAG:-26.03-py3}
     container_name: vllm
@@ -110,16 +115,17 @@ services:
       - "--kv-cache-dtype"
       - "${VLLM_KV_CACHE_DTYPE:-fp8}"
       - "--trust-remote-code"
+      - "--enable-chunked-prefill"
       - "--enable-auto-tool-choice"
       - "--tool-call-parser"
       - "qwen3_coder"
       - "--reasoning-parser-plugin"
-      - "/vllm_plugins/nano_v3_reasoning_parser.py"
+      - "${VLLM_REASONING_PARSER_PLUGIN:-/vllm_plugins/nano_v3_reasoning_parser.py}"
       - "--reasoning-parser"
-      - "nano_v3"
+      - "${VLLM_REASONING_PARSER:-nano_v3}"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-      # FP4 MoE kernel tuning — required for Nemotron-30B-NVFP4; harmless for other models
+      # FP4 MoE kernel tuning — set to 0 for non-FP4 models (e.g. Qwen FP8)
       - VLLM_USE_FLASHINFER_MOE_FP4=${VLLM_USE_FLASHINFER_MOE_FP4:-1}
       - VLLM_FLASHINFER_MOE_BACKEND=${VLLM_FLASHINFER_MOE_BACKEND:-throughput}
     ipc: host
@@ -165,7 +171,7 @@ services:
       - "--batch-size"
       - "${EMBEDDER_BATCH_SIZE:-32}"
       - "--device"
-      - "cuda"
+      - "${EMBEDDER_DEVICE:-cuda}"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
     ipc: host
@@ -259,7 +265,7 @@ services:
       - "--batch-size"
       - "${RERANKER_BATCH_SIZE:-32}"
       - "--device"
-      - "cuda"
+      - "${RERANKER_DEVICE:-cuda}"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
     ipc: host

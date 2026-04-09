@@ -1,19 +1,30 @@
-# Benchmark Results — DGX Spark (GB10)
+# Benchmark Results
 
-**Date:** 2026-04-07
-**Branch:** bench/dgx-spark-gb10
+Results are organized per hardware target and model.
+Raw CSVs live under `results/<hardware>/<model>/`.
+
+| Hardware | Results |
+|---|---|
+| DGX Spark GB10 | this file |
+| RTX Pro 6000 Blackwell | [`results/rtx-pro-6000/benchmark_summary.md`](results/rtx-pro-6000/benchmark_summary.md) |
+
+---
+
+# DGX Spark (GB10)
+
 **Hardware:** NVIDIA DGX Spark, GB10 (128 GB unified memory)
 
 ## Stack configuration
 
 | Parameter | Value |
 |---|---|
-| Model | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4` |
+| `VLLM_NGC_TAG` | `26.03-py3` |
 | `VLLM_GPU_MEMORY_UTILIZATION` | 0.70 |
 | `VLLM_MAX_MODEL_LEN` | 8192 |
 | `VLLM_KV_CACHE_DTYPE` | fp8 |
-| `VLLM_MAX_NUM_SEQS` | 8 |
+| `VLLM_MAX_NUM_SEQS` | 64 |
 | `VLLM_TENSOR_PARALLEL_SIZE` | 1 |
+| `--enable-chunked-prefill` | yes |
 | Embedder | `BAAI/bge-m3` on GPU |
 | Reranker | `BAAI/bge-reranker-v2-m3` on GPU |
 | Vector store | Qdrant |
@@ -21,309 +32,193 @@
 ## Methodology
 
 Benchmarked with `locustfile.py`, 5-minute steady-state window (`--reset-stats`) per run.
-Two load levels tested: **10 users** (ramp 2/s) and **100 users** (ramp 5/s).
+User levels tested: **10 / 20 / 30 / 50 / 100** users.
 
-Three runs, in order:
+Three tag-filtered runs per user level, in order:
 
 | Run | Tag | Tasks |
 |---|---|---|
 | 1 | `nothink` | NT PLAIN (weight 1) + NT RAG (weight 3) |
 | 2 | `think` | PLAIN (weight 1) + RAG (weight 3) |
-| 3 | `mixed` | All four tasks (3:1:3:1 ratio) |
+| 3 | `mixed` | All four tasks (NT+think, 1:3:1:3 ratio) |
 
-Thinking is disabled per-request via `chat_template_kwargs: {"enable_thinking": false}` handled by the `nano_v3` reasoning parser plugin.
-
-RAG queries attach the Nurburgring knowledge base. PLAIN queries are bare chat with no retrieval.
-
----
-
-## Results — 10 users
-
-### Throughput
-
-| Mode | Total reqs / 5 min | req/s |
-|---|---|---|
-| nothink | 83 | **0.28** |
-| think | 38 | 0.13 |
-| mixed | 48 | 0.16 |
-
-Nothink delivers **2.2× more throughput** than think at 10 concurrent users.
-
-### TTFT — time to first token
-
-| Mode | PLAIN avg | PLAIN p50 | RAG avg | RAG p50 |
-|---|---|---|---|---|
-| nothink | **2.2s** | 1.6s | **28.5s** | 28s |
-| think | 8.8s | 9.5s | 34.9s | 31s |
-
-Nothink is **4× faster** on plain TTFT. The RAG gap is smaller (28.5s vs 34.9s) because Qdrant retrieval dominates TTFT regardless of thinking mode.
-
-### E2E latency
-
-| Mode | PLAIN avg | PLAIN p50 | RAG avg | RAG p50 |
-|---|---|---|---|---|
-| nothink | 22.6s | 20s | 35.5s | 35s |
-| think | 56.6s | 51s | 69.8s | 66s |
-
-### ITL — inter-token latency (once streaming starts)
-
-| Mode | avg | p95 |
-|---|---|---|
-| nothink | 76ms | 123–139ms |
-| think | 68–69ms | 100–102ms |
-
-ITL is nearly identical between modes. **The GPU is not the bottleneck once generation is underway** — token throughput is consistent regardless of thinking mode.
-
-### TPS — ms per output token (lower = faster)
-
-| Mode | PLAIN avg | RAG avg |
-|---|---|---|
-| nothink | 22ms | 160ms |
-| think | 23ms | 40ms |
-
-The elevated NT RAG TPS reflects that nothink responses are counted via `reasoning_content` tokens, which may differ in chunking from `content` tokens.
-
-### RAG overhead — retrieval cost above PLAIN TTFT
-
-| Mode | avg | p50 | p95 |
-|---|---|---|---|
-| nothink | 25.9s | 26s | 38s |
-| think | 27.0s | 27s | 45s |
-
-**RAG overhead is ~26–27s regardless of thinking mode.** Qdrant vector retrieval is the dominant latency factor for RAG queries at 10 concurrent users, not the LLM.
+Thinking is disabled per-request via `chat_template_kwargs: {"enable_thinking": false}`.
+RAG queries attach the Nürburgring knowledge base (8 domain-specific questions, hybrid search top-k=5 → reranked to 3).
 
 ---
 
-## Results — 100 users
+# Model: Nemotron-3-Nano-30B-A3B-NVFP4
 
-> **Stack saturated.** `VLLM_MAX_NUM_SEQS=8` limits vLLM to 8 concurrent sequences. With 100 users, 92 requests queue immediately and hit the 120s client timeout.
+**Date:** 2026-04-08
+**Model:** `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4`
+**Raw CSVs:** `results/dgx-spark-gb10/nemotron-nano/`
 
-### Failure rates
-
-| Run | Requests | Failures | Failure rate |
-|---|---|---|---|
-| nothink | 122 | 110 | **90%** |
-| think | 153 | 153 | **100%** |
-| mixed | 144 | 144 | **100%** |
-
-All failures are `ReadTimeoutError` at the 120s client timeout (`HTTP 0`). No RAG requests completed in think or mixed runs.
-
-### nothink — only partial data captured
-
-The 12 NT PLAIN requests that completed before the queue filled provide a pre-saturation snapshot:
-
-| Metric | 10 users | 100 users |
-|---|---|---|
-| NT PLAIN TTFT avg | 2.2s | **56.7s** |
-| NT PLAIN TTFT p50 | 1.6s | 65s |
-| NT PLAIN ITL avg | 76ms | 74ms |
-| NT PLAIN TPS avg | 22ms/tok | 129ms/tok |
-
-TTFT degraded **26×** while ITL remained stable — confirming the bottleneck is queue wait time before vLLM picks up the request, not GPU generation speed once started.
-
-### think / mixed — complete timeout
-
-Every request timed out. vLLM's thinking token generation at `VLLM_MAX_NUM_SEQS=8` cannot serve 100 concurrent users within any reasonable timeout.
-
----
-
-## Key findings
-
-1. **Disable thinking for high-concurrency workloads.** At 10 users, nothink gives 2.2× throughput and 4× faster plain TTFT with no meaningful ITL regression.
-
-2. **`VLLM_MAX_NUM_SEQS=8` is the hard concurrency ceiling.** At 100 users it causes complete saturation. Raising this is the highest-priority tuning action before re-testing at scale.
-
-3. **Qdrant is the RAG bottleneck at low concurrency.** The 26–27s retrieval overhead at 10 users dominates RAG TTFT. At higher concurrency, vLLM queue depth takes over as the primary bottleneck.
-
-4. **GPU generation throughput is healthy.** ITL of 68–76ms is stable from 10 to 100 users — the GB10 has headroom. The problem is queue depth, not compute.
-
-5. **Saturation point is between 10 and 100 users.** A sweep at 20, 30, and 50 users is needed to characterise the degradation curve before tuning `VLLM_MAX_NUM_SEQS`.
-
----
-
----
-
-## Results — 100 users, VLLM_MAX_NUM_SEQS=64
-
-> **0 failures.** Raising MAX_NUM_SEQS from 8 to 64 eliminates timeouts. The system is under load but stable.
-
-vLLM image: `nvcr.io/nvidia/vllm:26.02-py3` (upgrade to 26.03-py3 pending).
-
-### Throughput
-
-| Mode | Total reqs / 5 min | req/s | vs 10u |
-|---|---|---|---|
-| nothink | 152 | **0.54** | +93% |
-| think | 55 | **0.20** | +54% |
-| mixed | 100 | 0.36 | — |
-
-Throughput roughly doubles vs 10 users thanks to higher concurrency — the GB10 is now being utilised more fully.
-
-### TTFT — time to first token
-
-| Mode | PLAIN avg | PLAIN p50 | RAG avg | RAG p50 |
-|---|---|---|---|---|
-| nothink | 35.7s | 33s | 127.8s | 124s |
-| think | 49.3s | 44s | 160.8s | 155s |
-| mixed NT | 45.4s | 41s | 144.2s | 142s |
-| mixed think | 47.3s | 49s | 142.9s | 137s |
-
-TTFT degraded significantly vs 10 users (nothink plain: 2.2s → 35.7s) due to queue depth — 100 users competing for 64 slots.
-
-### E2E latency
-
-| Mode | PLAIN avg | PLAIN p50 | RAG avg | RAG p50 |
-|---|---|---|---|---|
-| nothink | 88.7s | 67s | 151.6s | 150s |
-| think | 136s | 141s | 235s | 237s |
-
-### ITL — inter-token latency
-
-| Mode | avg | p95 |
-|---|---|---|
-| nothink | 224–259ms | 451–483ms |
-| think | 193–224ms | 366–462ms |
-
-ITL degraded **3× vs 10 users** (from ~70ms to ~210–260ms). This is expected: with 64 concurrent sequences batched together, each token generation step handles more work per iteration, increasing per-token latency across all sequences. The GB10 is now genuinely loaded.
-
-### RAG overhead
-
-| Mode | avg | p50 | p95 |
-|---|---|---|---|
-| nothink | 88.2s | 83s | 146s |
-| think | 117.9s | 114s | 174s |
-
-RAG overhead exploded from ~27s at 10 users to 88–118s at 100 users. This combines Qdrant retrieval latency under concurrent load and queue wait time before vLLM picks up the request.
-
-### Comparison summary
-
-| Metric | 10u / seqs=8 | 100u / seqs=8 | 100u / seqs=64 |
-|---|---|---|---|
-| Failure rate | 0% | 90–100% | **0%** |
-| NT PLAIN TTFT avg | 2.2s | 56.7s† | 35.7s |
-| PLAIN TTFT avg | 8.8s | timeout | 49.3s |
-| NT PLAIN ITL avg | 76ms | 74ms† | 224ms |
-| PLAIN ITL avg | 69ms | timeout | 224ms |
-| nothink req/s | 0.28 | ~0 | **0.54** |
-| think req/s | 0.13 | ~0 | **0.20** |
-
-† partial data from the few requests that squeezed through before queue filled.
-
----
-
-## Key findings
-
-1. **`VLLM_MAX_NUM_SEQS=64` is the minimum viable setting for 100 concurrent users.** seqs=8 causes complete saturation; seqs=64 eliminates failures and doubles throughput.
-
-2. **Disable thinking for high-concurrency workloads.** Nothink gives 2.7× more throughput than think at 100 users, and TTFT is 14s faster on plain queries.
-
-3. **ITL degrades 3× at 100 users** (70ms → 220ms). This is a batching effect — 64 concurrent sequences share compute per step. The GB10 is now genuinely saturated; further scaling requires either a larger model-serving budget or reduced concurrency.
-
-4. **Qdrant is a growing bottleneck under load.** RAG overhead scales from 27s at 10 users to 88–118s at 100 users. At higher concurrency, externalising or tuning Qdrant becomes critical.
-
-5. **Nothink TTFT at 100 users (35.7s) is still high for interactive use.** Acceptable for batch/background workloads; for interactive chat, target ≤20 concurrent users or raise MAX_NUM_SEQS further.
-
----
-
----
-
-## Sweep — 20 / 30 / 50 / 100 users (VLLM_MAX_NUM_SEQS=64, vLLM 26.03-py3)
-
-vLLM upgraded to `nvcr.io/nvidia/vllm:26.03-py3` (v0.17.1+a03ca76a.nv26.03). 0 failures across all 12 runs.
-
-### Throughput (req/s — HTTP POST)
+## Throughput (req/s)
 
 | Users | nothink | think | mixed |
 |---|---|---|---|
-| 20 | 0.30 | 0.16 | 0.24 |
-| 30 | 0.43 | 0.23 | 0.33 |
-| 50 | **0.56** | **0.25** | **0.36** |
-| 100 | 0.56 | 0.17 | 0.34 |
+| 10 | 1.035 | 0.423 | 0.712 |
+| 20 | 1.767 | 0.647 | 1.274 |
+| 30 | 2.109 | 0.915 | 1.397 |
+| 50 | 2.720 | 1.175 | 1.696 |
+| 100 | 2.926 | 1.163 | 1.854 |
 
-**Throughput plateaus at 50 users** — the saturation knee. Nothink throughput is stable from 50→100 users; think mode drops at 100 users as KV cache pressure increases.
-
-### TTFT — time to first token (avg)
-
-| Users | NT PLAIN | NT RAG | PLAIN (think) | RAG (think) |
-|---|---|---|---|---|
-| 20 | **2s** | 53s | 22s | 92s |
-| 30 | <1s | 47s | 20s | 101s |
-| 50 | <1s | 61s | 29s | 131s |
-| 100 | 26s | 127s | 95s | 239s |
-
-NT PLAIN TTFT stays sub-second up to 30 users, then climbs. The 100-user jump (26s) reflects queue depth at the 64-seq ceiling.
-
-### E2E latency (avg)
+## TTFT — time to first token (avg, seconds)
 
 | Users | NT PLAIN | NT RAG | PLAIN (think) | RAG (think) |
 |---|---|---|---|---|
-| 20 | 35s | 65s | 73s | 100s |
-| 30 | 34s | 61s | 78s | 112s |
-| 50 | 50s | 80s | 92s | 143s |
-| 100 | 79s | 148s | 168s | 250s |
+| 10 | 1.41 | 31.20 | 49.74 | 86.14 |
+| 20 | 0.47 | 37.69 | 35.77 | 99.89 |
+| 30 | 0.63 | 40.89 | 53.66 | 110.08 |
+| 50 | 0.82 | 54.81 | 43.76 | 138.02 |
+| 100 | 16.13 | 121.99 | 100.68 | 224.75 |
 
-### ITL — inter-token latency (avg, nothink mode)
+> **Note:** NT RAG and RAG (think) TTFT includes full RAG retrieval (embed → hybrid search → rerank) before the first token. PLAIN (think) TTFT captures the first `<think>` token; answer tokens follow after the reasoning chain.
 
-| Users | NT ITL avg |
-|---|---|
-| 10 | 76ms |
-| 20 | 126ms |
-| 30 | 150ms |
-| 50 | 211ms |
-| 100 | 238ms |
+## E2E latency (avg, seconds)
 
-ITL scales linearly with concurrency — each additional batch of sequences adds ~2ms/user of per-token overhead. This is pure batching cost; the GB10 compute is healthy throughout.
+| Users | NT PLAIN | NT RAG | PLAIN (think) | RAG (think) |
+|---|---|---|---|---|
+| 10 | 64.0 | 40.7 | 174.0 | 96.0 |
+| 20 | 101.1 | 51.9 | 231.8 | 113.6 |
+| 30 | 119.5 | 57.6 | 161.4 | 124.7 |
+| 50 | 132.0 | 76.9 | 193.8 | 158.2 |
+| 100 | 168.3 | 146.9 | 180.9 | 245.1 |
 
-### RAG overhead (avg TTFT above PLAIN baseline)
+## ITL — inter-token latency (avg, ms)
 
-| Users | nothink RAG overhead | think RAG overhead |
+| Users | nothink | think |
 |---|---|---|
-| 10 | 26s | 27s |
-| 20 | 43s | 71s |
-| 30 | 46s | 81s |
-| 50 | 60s | 83s |
-| 100 | 92s | 140s |
+| 10 | 90.9 | 95.8 |
+| 20 | 122.2 | 110.5 |
+| 30 | 149.2 | 139.7 |
+| 50 | 197.1 | 181.8 |
+| 100 | 234.1 | 209.9 |
 
-RAG overhead grows with concurrency — Qdrant is under increasing pressure. At 100 users with think mode, retrieval adds **140s** above the plain baseline — Qdrant is becoming the dominant latency driver.
+## RAG overhead (avg TTFT above PLAIN baseline, seconds)
 
-### 26.02-py3 vs 26.03-py3 at 100 users (nothink)
+| Users | nothink | think |
+|---|---|---|
+| 10 | 31.91 | 44.29 |
+| 20 | 37.21 | 82.11 |
+| 30 | 41.27 | 73.58 |
+| 50 | 54.06 | 110.56 |
+| 100 | 101.14 | 115.35 |
 
-| Metric | 26.02-py3 | 26.03-py3 | Delta |
+---
+
+# Model: Qwen3.5-35B-A3B-FP8
+
+**Date:** 2026-04-08
+**Model:** `Qwen/Qwen3.5-35B-A3B-FP8`
+**Raw CSVs:** `results/dgx-spark-gb10/qwen3.5-35b-fp8/`
+**Reasoning parser:** `deepseek_r1` (built-in — no plugin required)
+
+> **Think mode limitation:** With `VLLM_MAX_MODEL_LEN=8192`, Qwen3.5 in think mode generates reasoning chains long enough that most requests exceed the 5-minute benchmark window. At ≤30 users, zero think-mode requests complete; at 50–100 users only a handful complete. Think and mixed columns are marked `—` where throughput is effectively zero (< 0.06 req/s aggregated).
+
+## Throughput (req/s)
+
+| Users | nothink | think | mixed |
 |---|---|---|---|
-| Requests / 5 min | 152 | 163 | +7% |
-| req/s | 0.54 | 0.56 | +4% |
-| NT PLAIN TTFT avg | 35.7s | 26s | −27% |
-| NT RAG TTFT avg | 127.8s | 127s | ~0% |
+| 10 | 0.226 | — | — |
+| 20 | 0.343 | — | — |
+| 30 | 0.273 | — | 0.124 |
+| 50 | 0.341 | 0.053 | 0.072 |
+| 100 | 0.206 | — | 0.063 |
 
-26.03-py3 delivers a meaningful TTFT improvement on plain queries (+27% faster) with marginal throughput gains.
+## TTFT — time to first token (avg, seconds)
+
+Nothink only — think mode has too few completions for stable averages.
+
+| Users | NT PLAIN | NT RAG |
+|---|---|---|
+| 10 | 13.78 ¹ | 202.06 ¹ |
+| 20 | 0.66 | 181.58 |
+| 30 | 1.02 | 141.46 |
+| 50 | 28.11 | 218.27 |
+| 100 | 24.55 | — |
+
+¹ *u10 results collected during model warm-up (first run after load); may overstate latency.*
+
+## E2E latency (avg, seconds)
+
+Nothink only.
+
+| Users | NT PLAIN | NT RAG |
+|---|---|---|
+| 10 | 73.6 | 227.5 |
+| 20 | 94.3 | 218.1 |
+| 30 | 98.6 | 171.9 |
+| 50 | 154.0 | 251.2 |
+| 100 | 164.1 | — |
+
+## ITL — inter-token latency (avg, ms)
+
+Nothink only (think mode: insufficient completions).
+
+| Users | nothink |
+|---|---|
+| 10 | 107.8 |
+| 20 | 167.6 |
+| 30 | 203.1 |
+| 50 | 218.8 |
+| 100 | 225.8 |
+
+## RAG overhead (avg TTFT above PLAIN baseline, seconds)
+
+Nothink only.
+
+| Users | nothink |
+|---|---|
+| 10 | 201.63 ¹ |
+| 20 | 213.69 |
+| 30 | 140.37 |
+| 50 | 163.60 |
+| 100 | — |
 
 ---
 
-## Key findings
+# Cross-model comparison (DGX GB10)
 
-1. **`VLLM_MAX_NUM_SEQS=64` is stable up to 100 users with 0 failures.** The system degrades gracefully under load — no hard ceiling at 100u.
+## Throughput — nothink (req/s)
 
-2. **Saturation knee is at 50 users.** Throughput plateaus from 50→100 for nothink (0.56 req/s). Beyond 50 users you are buying latency, not throughput.
+| Users | Nemotron-Nano | Qwen3.5-35B |
+|---|---|---|
+| 10 | 1.035 | 0.226 |
+| 20 | 1.767 | 0.343 |
+| 30 | 2.109 | 0.273 |
+| 50 | 2.720 | 0.341 |
+| 100 | 2.926 | 0.206 |
 
-3. **NT PLAIN TTFT stays sub-second up to 30 users.** This is the interactive sweet spot for nothink mode. Beyond 30 users TTFT degrades perceptibly.
+## NT PLAIN TTFT (avg, seconds)
 
-4. **ITL scales linearly at ~2ms per additional user** (76ms at 10u → 238ms at 100u). The GB10 GPU is not compute-saturated — the cost is purely from larger batch sizes.
+| Users | Nemotron-Nano | Qwen3.5-35B |
+|---|---|---|
+| 10 | 1.41 | 13.78 ¹ |
+| 20 | 0.47 | 0.66 |
+| 30 | 0.63 | 1.02 |
+| 50 | 0.82 | 28.11 |
+| 100 | 16.13 | 24.55 |
 
-5. **Qdrant RAG overhead is the dominant latency factor at scale.** It grows from 27s at 10 users to 140s at 100 users (think mode). Tuning or replacing Qdrant is the highest-leverage improvement for RAG workloads.
+## ITL nothink (avg, ms)
 
-6. **Think mode degrades faster than nothink at high concurrency.** At 100 users think PLAIN TTFT is 95s vs nothink's 26s — a 3.7× gap. For concurrent interactive use, disable thinking or cap concurrency at 30 users.
-
-7. **26.03-py3 is a worthwhile upgrade** — 27% faster NT PLAIN TTFT at 100 users, no regressions observed.
+| Users | Nemotron-Nano | Qwen3.5-35B |
+|---|---|---|
+| 10 | 90.9 | 107.8 |
+| 20 | 122.2 | 167.6 |
+| 30 | 149.2 | 203.1 |
+| 50 | 197.1 | 218.8 |
+| 100 | 234.1 | 225.8 |
 
 ---
 
-## Next steps
+## Summary
 
-- [ ] Investigate Qdrant performance under concurrent load — tune thread count, connection pool, or consider a dedicated Qdrant instance
-- [ ] Consider raising `VLLM_MAX_MODEL_LEN` from 8192 — with seqs=64 there is KV cache headroom above the 50-user knee
-- [ ] Profile GB10 GPU utilisation during 50-user runs to quantify remaining headroom
-- [ ] Sweep `VLLM_MAX_NUM_SEQS` between 64 and 128 to see if throughput plateau shifts
+**Nemotron-3-Nano-30B-A3B-NVFP4** saturates at ~2.9 req/s (nothink) around 50–100 users. NT PLAIN TTFT stays sub-second up to 50 users, then spikes at 100 (queue saturation). Think mode runs cleanly but at roughly half the throughput of nothink (longer generation). RAG overhead dominates TTFT in all modes (31–120 s depending on load), driven by hybrid search + reranking.
+
+**Qwen3.5-35B-A3B-FP8** delivers 4–9× lower nothink throughput than Nemotron on this stack. NT PLAIN TTFT is competitive at light loads (u20–30) but degrades at higher concurrency. Think mode is not viable at `MAX_MODEL_LEN=8192` — reasoning chains overflow the benchmark window. RAG overhead for nothink is very high (140–214 s) due to the larger base model latency compounding retrieval cost. Increasing `VLLM_MAX_MODEL_LEN` or disabling thinking would be required for a fair think-mode comparison.
 
 ---
 
-*Raw CSV and HTML reports in `results/` — filenames match `{mode}_u{N}` pattern. Previous seqs=8 runs in `*_u100_*`, seqs=64 baseline in `*_u100_seqs64_*`.*
+*Raw CSV and HTML reports: `results/dgx-spark-gb10/{nemotron-nano,qwen3.5-35b-fp8}/`*
+*Naming convention: `{mode}_u{N}_stats.csv`*

@@ -26,7 +26,8 @@ Four task variants are run so every metric has a full comparison matrix:
   NT PLAIN      — bare chat, thinking disabled                (weight 1)  @tag nothink
 
 Thinking is disabled via chat_template_kwargs {"enable_thinking": false},
-handled by the nano_v3 reasoning parser plugin.
+a native Qwen3 chat template parameter. TTFT in think mode captures the first
+<think> token; in nothink mode it captures the first answer token.
 
 Use -T think or -T nothink to run a single mode in isolation.
 
@@ -46,7 +47,9 @@ Usage:
   # headless, 10 concurrent users, ramp 2/s, 60 s, save CSV
   ./locustfile.py --host http://<host>:3000 \\
     --headless -u 10 -r 2 --run-time 60s \\
-    --csv=results/bench
+    --csv=results/dgx-spark-gb10/nothink_u10 -T nothink
+
+  # RTX Pro 6000 results go under results/rtx-pro-6000/
 """
 
 from __future__ import annotations
