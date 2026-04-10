@@ -81,6 +81,29 @@ smoke_test() {
     echo "[sweep] smoke test passed (HTTP 200)"
 }
 
+warmup() {
+    # Send two full-length requests (no max_tokens cap) to trigger any lazy
+    # kernel compilation before benchmark starts.  Critical for FP4 models:
+    # FlashInfer FP4 MoE profiling runs on the first real batch and can block
+    # generation for several minutes — without warmup, all locust requests stay
+    # in-flight for the entire 5-minute window and are never recorded.
+    local model api_key http_code i
+    model=$(grep '^OPENWEBUI_MODEL=' .env | cut -d= -f2)
+    api_key=$(grep '^OPENWEBUI_API_KEY=' .env | cut -d= -f2)
+    echo "[sweep] warming up $model (2 requests, up to 10 min each) ..."
+    for i in 1 2; do
+        echo "[sweep] warmup $i/2 ..."
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "$HOST/api/chat/completions" \
+            -H "Authorization: Bearer $api_key" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"What spectator areas are available at the Nürburgring 24h race?\"}],\"stream\":false}" \
+            --max-time 600 2>/dev/null || echo "000")
+        echo "[sweep] warmup $i/2: HTTP $http_code"
+    done
+    echo "[sweep] warmup done"
+}
+
 run_locust() {
     local tag=$1 users=$2 ramp=$3 outdir=$4
     local prefix="${tag}_u${users}"
@@ -123,6 +146,7 @@ switch_model() {
     docker compose restart open-webui
     wait_healthy open-webui
     smoke_test
+    warmup
 }
 
 # ── Phase 1: Nemotron ─────────────────────────────────────────────────────────
@@ -131,6 +155,7 @@ if [[ "$TARGET" != "l40s" ]] && [[ "$PHASE" == "all" || "$PHASE" == "nemotron" ]
     echo "=== [$TARGET] Phase 1: Nemotron-3-Nano-30B-A3B-NVFP4 ==="
     wait_healthy vllm
     smoke_test
+    warmup
     sweep "results/$TARGET/nemotron-nano"
 fi
 
@@ -153,6 +178,7 @@ if [[ "$PHASE" == "all" || "$PHASE" == "qwen" ]]; then
     if [[ "$TARGET" == "l40s" ]]; then
         wait_healthy vllm  # l40s starts already configured for Qwen FP8
         smoke_test
+        warmup
     else
         switch_model "$QWEN_MODEL" "/vllm_plugins/noop.py" "$QWEN_PARSER" "$QWEN_FP4" "$QWEN_MAX_LEN"
     fi

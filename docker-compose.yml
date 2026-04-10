@@ -303,7 +303,8 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      # qdrant:latest has no curl — use bash /dev/tcp to check REST port
+      test: ["CMD-SHELL", "bash -c '>/dev/tcp/localhost/6333'"]
       interval: 30s
       timeout: 10s
       retries: 5
