@@ -44,7 +44,8 @@ case "$TARGET" in
     ;;
 esac
 
-HOST="http://localhost:3000"
+WEBUI_PORT=$(grep '^WEBUI_PORT=' .env | cut -d= -f2)
+HOST="http://localhost:${WEBUI_PORT:-3000}"
 LOCUST="./locustfile.py"
 
 # ── helpers ──────────────────────────────────────────────────────────────────

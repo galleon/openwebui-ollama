@@ -233,10 +233,12 @@ Nothink only.
 
 # Model: Qwen3.5-35B-A3B-NVFP4
 
-**Date:** pending
+**Date:** pending (DGX GB10 sweep not yet run)
 **Model:** `AxionML/Qwen3.5-35B-A3B-NVFP4`
 **Config:** `VLLM_MAX_MODEL_LEN=32768`, `VLLM_REASONING_PARSER=qwen3`, `VLLM_USE_FLASHINFER_MOE_FP4=1`
 **Raw CSVs:** `results/dgx-spark-gb10/qwen3.5-35b-nvfp4/` *(sweep pending)*
+
+> RTX Pro 6000 Blackwell results for this model are available in [`results/rtx-pro-6000/benchmark_summary.md`](results/rtx-pro-6000/benchmark_summary.md).
 
 ---
 

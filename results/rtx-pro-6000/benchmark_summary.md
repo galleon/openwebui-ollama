@@ -1,170 +1,276 @@
-# Benchmark Summary
+# Benchmark Results — RTX Pro 6000 Blackwell
 
-**Model:** `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4`  
-**Hardware:** NVIDIA RTX Pro 6000 Blackwell (96 GB GDDR7)  
-**Stack:** Open WebUI + vLLM · embedder: `BAAI/bge-m3` · reranker: `BAAI/bge-reranker-v2-m3`  
-**Knowledge base:** Nürburgring FAQ (8 questions, hybrid search, RAG top-k=5 → reranked to 3)  
-**Tool:** Locust · task ratio RAG:PLAIN = 3:1 · wait 1–3 s between tasks
+**Hardware:** NVIDIA RTX Pro 6000 Blackwell Server Edition (97 GB GDDR7)
+**Date:** 2026-04-10
+**Stack:** Open WebUI + vLLM · embedder: `BAAI/bge-m3` · reranker: `BAAI/bge-reranker-v2-m3` · vector store: Qdrant
 
----
+## Stack configuration
 
-## Run 1 — 10 concurrent users
+| Parameter | Value |
+|---|---|
+| `VLLM_NGC_TAG` | `26.03-py3` |
+| `VLLM_GPU_MEMORY_UTILIZATION` | 0.55 |
+| `VLLM_KV_CACHE_DTYPE` | fp8 |
+| `VLLM_MAX_MODEL_LEN` | 16384 |
+| `VLLM_MAX_NUM_SEQS` | 64 |
+| `VLLM_TENSOR_PARALLEL_SIZE` | 1 |
+| Embedder | `BAAI/bge-m3` on GPU |
+| Reranker | `BAAI/bge-reranker-v2-m3` on GPU |
+| Vector store | Qdrant |
 
-`-u 10 -r 2 --run-time 60s`
+## Methodology
 
-| Metric | PLAIN (no KB) | RAG (with KB) |
+Benchmarked with `locustfile.py`, 5-minute steady-state window (`--reset-stats`) per run.
+User levels tested: **10 / 20 / 30 / 50 / 100** users.
+
+Three tag-filtered runs per user level:
+
+| Run | Tag | Tasks |
 |---|---|---|
-| Requests | 6 | 29 |
-| Failures | 0 | 0 |
-| Throughput | 0.10 req/s | 0.49 req/s |
-| **TTFT avg** | 3,249 ms | 10,374 ms |
-| TTFT p50 | 3,000 ms | 9,500 ms |
-| TTFT p95 | 6,000 ms | 16,000 ms |
-| **E2E avg** | 19,460 ms | 11,803 ms |
-| E2E p50 | 21,000 ms | 10,000 ms |
-| E2E p95 | 29,000 ms | 18,000 ms |
-| ITL avg | 10 ms | 10 ms |
-| ITL p95 | 12 ms | 13 ms |
-| TPS avg (ms/token) | 3 | 29 |
-| **RAG overhead avg** | — | 8,440 ms |
-| RAG overhead p50 | — | 7,600 ms |
-| RAG overhead p95 | — | 16,000 ms |
+| 1 | `nothink` | NT PLAIN (weight 1) + NT RAG (weight 3) |
+| 2 | `think` | PLAIN (weight 1) + RAG (weight 3) |
+| 3 | `mixed` | All four tasks (NT+think, 1:3:1:3 ratio) |
 
-> PLAIN E2E is higher than RAG E2E because unrestricted responses are much longer.
-> TPS difference (3 vs 29 ms/token) reflects the token count gap between grounded and open-ended answers.
+RAG queries attach the Nürburgring knowledge base (8 domain-specific questions, hybrid search top-k=5 → reranked to 3).
 
 ---
 
-## Run 2 — 100 concurrent users
+# Model: Nemotron-3-Nano-30B-A3B-NVFP4
 
-`-u 100 -r 10 --run-time 120s`
+**Model:** `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4`
+**Config:** `VLLM_MAX_MODEL_LEN=16384`, `VLLM_USE_FLASHINFER_MOE_FP4=1`, `VLLM_REASONING_PARSER=nano_v3`
+**Raw CSVs:** `nemotron-nano/`
 
-| Metric | PLAIN (no KB) | RAG (with KB) |
-|---|---|---|
-| Requests | 35 | 124 |
-| Failures | 0 | 0 |
-| Throughput | 0.29 req/s | 1.04 req/s |
-| **TTFT avg** | 20,373 ms | 50,497 ms |
-| TTFT p50 | 23,000 ms | 55,000 ms |
-| TTFT p95 | 40,000 ms | 67,000 ms |
-| **E2E avg** | 45,524 ms | 52,475 ms |
-| E2E p50 | 46,000 ms | 56,000 ms |
-| E2E p95 | 74,000 ms | 69,000 ms |
-| ITL avg | 17 ms | 16 ms |
-| ITL p95 | 41 ms | 51 ms |
-| TPS avg (ms/token) | 9 | 153 |
-| **RAG overhead avg** | — | 27,148 ms |
-| RAG overhead p50 | — | 26,000 ms |
-| RAG overhead p95 | — | 42,000 ms |
+## Throughput (completions/s)
 
----
-
-## 10 vs 100 users — scaling comparison
-
-| Metric | 10 users | 100 users | Ratio |
+| Users | nothink | think | mixed |
 |---|---|---|---|
-| Total throughput | 3.9 req/s | 9.1 req/s | +2.3x |
-| RAG TTFT avg | 10,374 ms | 50,497 ms | +4.9x |
-| RAG TTFT p50 | 9,500 ms | 55,000 ms | +5.8x |
-| RAG TTFT p95 | 16,000 ms | 67,000 ms | +4.2x |
-| RAG E2E avg | 11,803 ms | 52,475 ms | +4.4x |
-| RAG TPS avg (ms/token) | 29 | 153 | +5.3x |
-| PLAIN TTFT avg | 3,249 ms | 20,373 ms | +6.3x |
-| RAG overhead avg | 8,440 ms | 27,148 ms | +3.2x |
-| ITL avg | 10 ms | 16–17 ms | +1.6x |
+| 10 | 1.233 | 0.651 | 0.817 |
+| 20 | 1.963 | 1.047 | 1.387 |
+| 30 | 2.575 | 1.275 | 1.690 |
+| 50 | 3.403 | 1.723 | 2.228 |
+| 100 | 4.249 | 2.157 | 2.946 |
 
-### Key observations
+## TTFT — time to first token (avg, seconds)
 
-- **Throughput scales sub-linearly (+2.3x for 10x users)** — vLLM is capped at `VLLM_MAX_NUM_SEQS=32`, so the extra 68 users queue rather than run in parallel.
-- **TTFT blows up ~5x** — dominated by queue wait time, not GPU compute.
-- **ITL is nearly stable (10 → 16 ms)** — the GPU keeps pace per-token once a request starts; the bottleneck is admission, not generation.
-- **RAG overhead grows 3.2x** — retrieval itself is fast, but the reranker and embedding pipeline also contend under load.
-- **0 failures at both concurrency levels** — the system is stable; it degrades gracefully rather than erroring.
+### Nothink
 
----
-
-## Run 3 — 100 concurrent users, optimised config
-
-`-u 100 -r 10 --run-time 120s`
-
-Changes applied vs Run 2:
-- `VLLM_MAX_NUM_SEQS`: 32 → **64**
-- `VLLM_MAX_MODEL_LEN`: 65536 → **16384**
-- Added **`--enable-chunked-prefill`**
-
-| Metric | PLAIN (no KB) | RAG (with KB) |
+| Users | NT PLAIN | NT RAG |
 |---|---|---|
-| Requests | 41 | 139 |
-| Failures | 0 | 0 |
-| Throughput | 0.35 req/s | 1.18 req/s |
-| **TTFT avg** | 28,585 ms | 44,080 ms |
-| TTFT p50 | 28,000 ms | 44,000 ms |
-| TTFT p95 | 41,000 ms | 64,000 ms |
-| **E2E avg** | 56,888 ms | 46,907 ms |
-| E2E p50 | 53,000 ms | 47,000 ms |
-| E2E p95 | 82,000 ms | 69,000 ms |
-| ITL avg | 22 ms | 21 ms |
-| ITL p95 | 51 ms | 45 ms |
-| TPS avg (ms/token) | 20 | 138 |
-| **RAG overhead avg** | — | 16,817 ms |
-| RAG overhead p50 | — | 17,000 ms |
-| RAG overhead p95 | — | 36,000 ms |
+| 10 | 0.06 | 3.84 |
+| 20 | 0.08 | 4.90 |
+| 30 | 0.11 | 5.72 |
+| 50 | 0.15 | 7.43 |
+| 100 | 2.34 | 14.60 |
+
+### Think
+
+| Users | PLAIN | RAG |
+|---|---|---|
+| 10 | 5.12 | 9.62 |
+| 20 | 5.33 | 12.49 |
+| 30 | 6.42 | 15.64 |
+| 50 | 9.57 | 18.84 |
+| 100 | 16.43 | 35.32 |
+
+## E2E latency (avg, seconds)
+
+### Nothink
+
+| Users | NT PLAIN | NT RAG |
+|---|---|---|
+| 10 | 9.66 | 4.93 |
+| 20 | 13.27 | 6.49 |
+| 30 | 16.06 | 7.57 |
+| 50 | 20.13 | 9.83 |
+| 100 | 30.63 | 17.79 |
+
+### Think
+
+| Users | PLAIN | RAG |
+|---|---|---|
+| 10 | 20.10 | 10.82 |
+| 20 | 25.48 | 14.10 |
+| 30 | 30.84 | 17.67 |
+| 50 | 38.65 | 21.40 |
+| 100 | 50.35 | 38.15 |
+
+## ITL — inter-token latency (avg, ms)
+
+### Nothink
+
+| Users | NT PLAIN | NT RAG |
+|---|---|---|
+| 10 | 9.4 | 9.3 |
+| 20 | 13.1 | 12.9 |
+| 30 | 16.0 | 16.0 |
+| 50 | 20.3 | 20.4 |
+| 100 | 26.5 | 28.9 |
+
+### Think
+
+| Users | PLAIN | RAG |
+|---|---|---|
+| 10 | 9.5 | 9.6 |
+| 20 | 12.9 | 12.9 |
+| 30 | 15.4 | 15.5 |
+| 50 | 19.4 | 19.4 |
+| 100 | 22.4 | 22.2 |
+
+## RAG overhead (avg TTFT above PLAIN baseline, seconds)
+
+| Users | nothink | think |
+|---|---|---|
+| 10 | 3.79 | 5.05 |
+| 20 | 4.80 | 7.46 |
+| 30 | 5.62 | 10.39 |
+| 50 | 7.27 | 11.18 |
+| 100 | 12.59 | 18.71 |
 
 ---
 
-## Run 2 vs Run 3 — impact of optimisations (100 users)
+# Model: Qwen3.5-35B-A3B-NVFP4
 
-| Metric | Baseline (Run 2) | Optimised (Run 3) | Delta |
+**Model:** `AxionML/Qwen3.5-35B-A3B-NVFP4`
+**Config:** `VLLM_MAX_MODEL_LEN=16384`, `VLLM_USE_FLASHINFER_MOE_FP4=1`, `VLLM_REASONING_PARSER=qwen3`
+**Raw CSVs:** `qwen3.5-35b-nvfp4/`
+
+## Throughput (completions/s)
+
+| Users | nothink | think | mixed |
 |---|---|---|---|
-| Total throughput | 9.1 req/s | 10.3 req/s | **+13%** |
-| Total requests completed | 1,078 | 1,219 | **+13%** |
-| RAG TTFT avg | 50,497 ms | 44,080 ms | **-13%** |
-| RAG TTFT p50 | 55,000 ms | 44,000 ms | **-20%** |
-| RAG TTFT p95 | 67,000 ms | 64,000 ms | -4% |
-| RAG E2E avg | 52,474 ms | 46,907 ms | **-11%** |
-| **RAG overhead avg** | 27,148 ms | 16,817 ms | **-38%** |
-| RAG overhead p50 | 26,000 ms | 17,000 ms | **-35%** |
-| PLAIN TTFT avg | 20,373 ms | 28,585 ms | +40% ⚠ |
-| PLAIN E2E avg | 45,524 ms | 56,888 ms | +25% ⚠ |
-| ITL avg | 16–17 ms | 21–22 ms | +34% |
+| 10 | 0.282 | 0.082 | 0.139 |
+| 20 | 0.398 | 0.156 | 0.193 |
+| 30 | 0.575 | 0.179 | 0.281 |
+| 50 | 0.679 | 0.255 | 0.424 |
+| 100 | 0.906 | 0.260 | 0.393 |
 
-### Key observations
+## TTFT — time to first token (avg, seconds)
 
-- **+13% throughput** — more sequences admitted in parallel (64 vs 32) means higher GPU utilisation.
-- **RAG overhead dropped 38%** — the biggest win. Chunked prefill prevents long RAG prefill phases from blocking other requests; retrieval latency under load is much more predictable.
-- **RAG TTFT improved 13–20%** — queue wait reduced because more slots are available.
-- **PLAIN latency got worse (+40% TTFT)** ⚠ — with 64 concurrent sequences, PLAIN requests (which generate far more tokens) compete harder for GPU decode time. The GPU is more saturated, pushing up ITL (16 → 22 ms) for everyone.
-- **The trade-off**: these settings favour RAG throughput. If PLAIN (long-form) queries matter equally, a smaller increase to `VLLM_MAX_NUM_SEQS=48` with a longer context limit would be a better balance.
-- **Remaining bottleneck**: at 100 users even with 64 slots, ~36 users still queue. True 100-user concurrency at acceptable latency requires either a larger `VLLM_MAX_NUM_SEQS` or reducing context length.
+### Nothink
+
+| Users | NT PLAIN | NT RAG |
+|---|---|---|
+| 10 | 0.43 | 36.64 |
+| 20 | 0.07 | 49.91 |
+| 30 | 0.09 | 55.63 |
+| 50 | 0.74 | 68.08 |
+| 100 | 25.72 | 111.34 |
+
+### Think
+
+| Users | PLAIN | RAG |
+|---|---|---|
+| 10 | 24.82 | 120.71 |
+| 20 | 53.21 | 116.88 |
+| 30 | 36.44 | 138.02 |
+| 50 | 69.61 | 161.45 |
+| 100 | 88.86 | 219.28 |
+
+## E2E latency (avg, seconds)
+
+### Nothink
+
+| Users | NT PLAIN | NT RAG |
+|---|---|---|
+| 10 | 8.17 | 38.87 |
+| 20 | 10.26 | 53.00 |
+| 30 | 11.05 | 59.11 |
+| 50 | 14.92 | 72.39 |
+| 100 | 40.84 | 115.99 |
+
+### Think
+
+| Users | PLAIN | RAG |
+|---|---|---|
+| 10 | 32.34 | 122.77 |
+| 20 | 63.65 | 119.58 |
+| 30 | 47.82 | 140.56 |
+| 50 | 85.93 | 164.89 |
+| 100 | 106.95 | 222.78 |
+
+## ITL — inter-token latency (avg, ms)
+
+### Nothink
+
+| Users | NT PLAIN | NT RAG |
+|---|---|---|
+| 10 | 13.0 | 13.1 |
+| 20 | 17.3 | 17.2 |
+| 30 | 19.8 | 20.0 |
+| 50 | 24.1 | 24.1 |
+| 100 | 26.3 | 26.7 |
+
+### Think
+
+| Users | PLAIN | RAG |
+|---|---|---|
+| 10 | 13.6 | 13.7 |
+| 20 | 16.9 | 17.0 |
+| 30 | 25.3 | 17.7 |
+| 50 | 22.7 | 22.4 |
+| 100 | 24.8 | 23.8 |
+
+## RAG overhead (avg TTFT above PLAIN baseline, seconds)
+
+| Users | nothink | think |
+|---|---|---|
+| 10 | 35.21 | 72.51 |
+| 20 | 49.85 | 55.81 |
+| 30 | 55.56 | 89.86 |
+| 50 | 67.72 | 66.90 |
+| 100 | 81.87 | 79.33 |
 
 ---
 
-## Conclusion — further optimisation options
+# Cross-model comparison (RTX Pro 6000)
 
-### High impact, low effort (config / flag changes)
+## Throughput — nothink (completions/s)
 
-| Option | Change | Expected impact |
+| Users | Nemotron-Nano NVFP4 | Qwen3.5-35B NVFP4 |
 |---|---|---|
-| Prefix caching | `--enable-prefix-caching` | Reuses KV blocks for repeated RAG context — high hit rate with a small KB. Directly cuts TTFT. |
-| Multi-step scheduling | `--num-scheduler-steps 8` | Batches multiple decode steps per scheduler call, reducing Python overhead. Free throughput gain. |
-| Disable reranker | `ENABLE_RAG_HYBRID_SEARCH=false`, `RAG_TOP_K=3` | Removes GPU reranker from the hot path. RAG overhead dropped 38% in Run 3 — this could cut it further. Quality impact TBD on small focused KB. |
-| Tune chunked prefill chunk size | `--max-num-batched-tokens 2048` | Larger chunks process RAG context faster (lower TTFT); smaller chunks give decode more turns (lower ITL). Worth profiling both directions. |
+| 10 | 1.233 | 0.282 |
+| 20 | 1.963 | 0.398 |
+| 30 | 2.575 | 0.575 |
+| 50 | 3.403 | 0.679 |
+| 100 | 4.249 | 0.906 |
 
-### Medium impact, medium effort
+## Throughput — think (completions/s)
 
-| Option | Description | Expected impact |
+| Users | Nemotron-Nano NVFP4 | Qwen3.5-35B NVFP4 |
 |---|---|---|
-| Semantic response cache | Redis + similarity check in front of Open WebUI. With 8 rotating questions, cache hit rate is high after warmup. | Near-zero latency for repeated queries; removes them from the vLLM queue entirely. |
-| Request admission queue | Nginx rate limiter or async proxy admits requests at ~10 req/s (current vLLM capacity). | Predictable queue wait instead of unpredictable 44–50s TTFT spikes. Better perceived UX at same hardware. |
+| 10 | 0.651 | 0.082 |
+| 20 | 1.047 | 0.156 |
+| 30 | 1.275 | 0.179 |
+| 50 | 1.723 | 0.255 |
+| 100 | 2.157 | 0.260 |
 
-### High impact, high effort (architecture)
+## NT PLAIN TTFT (avg, seconds)
 
-| Option | Description | Expected impact |
+| Users | Nemotron-Nano NVFP4 | Qwen3.5-35B NVFP4 |
 |---|---|---|
-| Model routing | Small fast model (7B) for grounded RAG answers; 30B reserved for open-ended PLAIN queries. | RAG latency drops significantly; 30B capacity freed for requests that need it. |
+| 10 | 0.06 | 0.43 |
+| 20 | 0.08 | 0.07 |
+| 30 | 0.11 | 0.09 |
+| 50 | 0.15 | 0.74 |
+| 100 | 2.34 | 25.72 |
 
-### Recommended next steps
+## ITL nothink — NT PLAIN (avg, ms)
 
-1. Apply `--enable-prefix-caching` and `--num-scheduler-steps 8` — zero downside, immediate gain.
-2. Benchmark reranker-off vs reranker-on to quantify the quality/latency trade-off on this KB.
-3. If latency targets are still not met at 100 users, tune `VLLM_MAX_NUM_SEQS` and `VLLM_MAX_MODEL_LEN` together to find the best throughput/latency balance for the target concurrency.
+| Users | Nemotron-Nano NVFP4 | Qwen3.5-35B NVFP4 |
+|---|---|---|
+| 10 | 9.4 | 13.0 |
+| 20 | 13.1 | 17.3 |
+| 30 | 16.0 | 19.8 |
+| 50 | 20.3 | 24.1 |
+| 100 | 26.5 | 26.3 |
+
+---
+
+## Summary
+
+**Nemotron-3-Nano-30B-A3B-NVFP4** on the RTX Pro 6000 delivers exceptional throughput: 4.25 completions/s nothink at 100 users, with NT PLAIN TTFT staying sub-second up to 50 users. ITL scales smoothly from 9 ms (u10) to 26 ms (u100) — no stalls. Think mode runs at ~50% of nothink throughput and scales cleanly through 100 users. RAG overhead is 3.8–12.6 s (nothink) and 5–18.7 s (think), well within UX-acceptable range at all tested concurrency levels.
+
+**Qwen3.5-35B-A3B-NVFP4** delivers ~4–8× lower nothink throughput than Nemotron-Nano (0.28–0.91 vs 1.23–4.25 completions/s). Unlike the FP8 variant on GB10, think mode completes at all user levels — NVFP4 MoE kernels bring it within the 5-minute window even at 100 users (0.26 completions/s). NT PLAIN TTFT is competitive at light loads (sub-second up to u30) but spikes at u100 (25.7 s) where queuing dominates. RAG overhead in nothink mode is 35–82 s, driven by long PLAIN outputs queuing ahead of RAG requests. The ITL floor (~13–26 ms) is comparable to Nemotron at equivalent load, confirming effective NVFP4 quantization at the per-token level.
+
+*Raw CSVs: `nemotron-nano/` and `qwen3.5-35b-nvfp4/`*
