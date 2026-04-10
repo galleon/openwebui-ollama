@@ -60,7 +60,7 @@ ramp_for() {
 
 HOST="${OPENWEBUI_HOST:-http://localhost:8888}"
 LOCUST="./locustfile.py"
-RESULTS_ROOT="results/l40s/qwen3.5-35b-fp8"
+RESULTS_ROOT="results/l40s/qwen3.5-35b-fp8-qdrant"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
