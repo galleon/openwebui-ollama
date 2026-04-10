@@ -1,0 +1,63 @@
+
+L40S Qwen3.5-35B-FP8 parameter sweep
+  MAX_MODEL_LENS : 32768
+  MAX_NUM_SEQS   : 32
+  User levels    : 10 20 30 50 100
+  Think min len  : 32768
+  Total combos   : 1
+  Total locust runs: 15  (~5 min each → ~75 min locust time)
+  Results under  : results/l40s/qwen3.5-35b-fp8/mlen<L>_seqs<S>/
+
+
+════════════════════════════════════════════════════════════
+  COMBO: MAX_MODEL_LEN=32768   MAX_NUM_SEQS=32
+  Output: results/l40s/qwen3.5-35b-fp8/mlen32768_seqs32
+════════════════════════════════════════════════════════════
+[sweep] 12:46:56 Updating .env: VLLM_MAX_MODEL_LEN=32768  VLLM_MAX_NUM_SEQS=32
+[sweep] 12:46:56 Restarting vLLM container...
+time="2026-04-10T12:46:56Z" level=warning msg="No services to build"
+ Container vllm Recreate 
+ Container vllm Recreated 
+ Container vllm Starting 
+ Container vllm Started 
+[sweep] 12:46:57 Polling http://localhost:8000/health until vLLM is healthy...
+[sweep] 12:48:57 vLLM is healthy.
+[sweep] 12:48:57 ── nothink sweep ──
+[sweep] 12:48:57 ▶ nothink_u10  (tag=nothink, users=10, ramp=2/s)
+[sweep] 12:53:58 ✓ nothink_u10 done
+[sweep] 12:53:58 ▶ nothink_u20  (tag=nothink, users=20, ramp=2/s)
+[sweep] 12:58:58 ✓ nothink_u20 done
+[sweep] 12:58:58 ▶ nothink_u30  (tag=nothink, users=30, ramp=5/s)
+[sweep] 13:03:59 ✓ nothink_u30 done
+[sweep] 13:03:59 ▶ nothink_u50  (tag=nothink, users=50, ramp=5/s)
+[sweep] 13:08:59 ✓ nothink_u50 done
+[sweep] 13:08:59 ▶ nothink_u100  (tag=nothink, users=100, ramp=10/s)
+[sweep] 13:13:59 ✓ nothink_u100 done
+[sweep] 13:13:59 ── think sweep (MAX_MODEL_LEN=32768 >= 32768) ──
+[sweep] 13:13:59 ▶ think_u10  (tag=think, users=10, ramp=2/s)
+[sweep] 13:18:59 ✓ think_u10 done
+[sweep] 13:18:59 ▶ think_u20  (tag=think, users=20, ramp=2/s)
+[sweep] 13:23:59 ✓ think_u20 done
+[sweep] 13:23:59 ▶ think_u30  (tag=think, users=30, ramp=5/s)
+[sweep] 13:29:00 ✓ think_u30 done
+[sweep] 13:29:00 ▶ think_u50  (tag=think, users=50, ramp=5/s)
+[sweep] 13:34:00 ✓ think_u50 done
+[sweep] 13:34:00 ▶ think_u100  (tag=think, users=100, ramp=10/s)
+[sweep] 13:39:00 ✓ think_u100 done
+[sweep] 13:39:00 ── mixed sweep ──
+[sweep] 13:39:00 ▶ mixed_u10  (tag=mixed, users=10, ramp=2/s)
+[sweep] 13:44:00 ✓ mixed_u10 done
+[sweep] 13:44:00 ▶ mixed_u20  (tag=mixed, users=20, ramp=2/s)
+[sweep] 13:49:00 ✓ mixed_u20 done
+[sweep] 13:49:00 ▶ mixed_u30  (tag=mixed, users=30, ramp=5/s)
+[sweep] 13:54:01 ✓ mixed_u30 done
+[sweep] 13:54:01 ▶ mixed_u50  (tag=mixed, users=50, ramp=5/s)
+[sweep] 13:59:01 ✓ mixed_u50 done
+[sweep] 13:59:01 ▶ mixed_u100  (tag=mixed, users=100, ramp=10/s)
+[sweep] 14:04:01 ✓ mixed_u100 done
+[sweep] 14:04:01 COMBO done → results/l40s/qwen3.5-35b-fp8/mlen32768_seqs32
+
+[sweep] 14:04:01 ════════════════════════════════════════
+[sweep] 14:04:01 Sweep complete. Elapsed: 77 min
+[sweep] 14:04:01 Results: results/l40s/qwen3.5-35b-fp8/mlen<L>_seqs<S>/
+[sweep] 14:04:01 ════════════════════════════════════════

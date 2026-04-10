@@ -1,5 +1,5 @@
-# Docker Compose — Open WebUI + vLLM + Docling + Infinity
-# Target: NVIDIA DGX Spark (GB10 / Blackwell sm_121)
+# Docker Compose — Open WebUI + vLLM + Docling
+# Target: NVIDIA L40S (Ada Lovelace sm_89)
 #
 # Prerequisites:
 #   - NVIDIA Container Toolkit installed (nvidia-ctk runtime configure --runtime=docker)
@@ -7,7 +7,6 @@
 #
 # Quick start:
 #   cp .env.example .env                      # adjust as needed
-#   docker compose build docling vllm embedder  # build GB10-compatible images
 #   docker compose up -d
 
 services:
@@ -21,6 +20,7 @@ services:
       - "${WEBUI_PORT:-3000}:8080"
     volumes:
       - open_webui_data:/app/backend/data
+      - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
     environment:
       # vLLM as the sole inference backend (OpenAI-compatible)
       - OPENAI_API_BASE_URL=http://vllm:8000/v1
@@ -34,22 +34,16 @@ services:
       - WEBUI_AUTH=${WEBUI_AUTH:-true}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-changeme-replace-this}
 
-      # RAG / embedding — Infinity embedder replaces Ollama
-      - RAG_EMBEDDING_ENGINE=openai
+      # RAG / embedding — built-in sentence-transformers (CPU)
+      # RAG_EMBEDDING_ENGINE left unset → Open WebUI uses built-in engine
+      - RAG_EMBEDDING_ENGINE=
       - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-BAAI/bge-m3}
-      - RAG_OPENAI_API_BASE_URL=http://embedder:7997
-      - RAG_OPENAI_API_KEY=${RAG_OPENAI_API_KEY:-EMPTY}
-      - RAG_OPENAI_BATCH_SIZE=${RAG_OPENAI_BATCH_SIZE:-32}
 
-      # Reranker (hybrid search)
-      # Default: disabled. To use the dedicated GPU reranker:
-      #   set ENABLE_RAG_HYBRID_SEARCH=true, RAG_RERANKING_ENGINE=external
-      #   and start with --profile reranker
+      # Reranker (hybrid search) — built-in cross-encoder (CPU)
+      # Set ENABLE_RAG_HYBRID_SEARCH=true to activate
       - ENABLE_RAG_HYBRID_SEARCH=${ENABLE_RAG_HYBRID_SEARCH:-false}
-      - RAG_RERANKING_ENGINE=${RAG_RERANKING_ENGINE:-}
-      - RAG_RERANKING_MODEL=${RAG_RERANKING_MODEL:-}
-      - RAG_EXTERNAL_RERANKER_URL=${RAG_EXTERNAL_RERANKER_URL:-http://reranker:7998/rerank}
-      - RAG_EXTERNAL_RERANKER_API_KEY=${RAG_EXTERNAL_RERANKER_API_KEY:-EMPTY}
+      - RAG_RERANKING_ENGINE=
+      - RAG_RERANKING_MODEL=${RAG_RERANKING_MODEL:-BAAI/bge-reranker-v2-m3}
       - RAG_TOP_K=${RAG_TOP_K:-5}
       - RAG_TOP_K_RERANKER=${RAG_TOP_K_RERANKER:-3}
 
@@ -64,37 +58,35 @@ services:
     depends_on:
       vllm:
         condition: service_healthy
-      embedder:
-        condition: service_healthy
       docling:
         condition: service_healthy
 
-  # ─── vLLM ────────────────────────────────────────────────────────────────────
+  # ─── vLLM (Qwen3.5 — default) ────────────────────────────────────────────────
   # OpenAI-compatible inference server — sole LLM backend for Open WebUI.
-  # Uses NVIDIA's official NGC vLLM container (CUDA 13.x, native sm_121 support).
+  # Uses NVIDIA's official NGC vLLM container — supports L40S (sm_89) out of the box.
   # No custom build needed — pulled directly from NGC.
   #
-  # Model is loaded from HuggingFace Hub at startup — set VLLM_MODEL in .env.
-  # Gated models (Llama, Mistral, …) require HUGGING_FACE_HUB_TOKEN.
+  # Default model: Qwen/Qwen3.5-35B-A3B-FP8
+  #   35B MoE (3B active params), FP8 — fits on a single L40S.
+  #   Adjust VLLM_GPU_MEMORY_UTILIZATION downward if other services are also on GPU.
   #
-  # Nemotron-Nano models require a custom reasoning parser plugin.
-  # Download it once before starting:
-  #   mkdir -p ./vllm_plugins
-  #   wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
-  #     https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
+  # To switch to Nemotron-3-Nano, use the override file instead:
+  #   docker compose -f docker-compose.yml -f docker-compose.nemotron.yml up -d
+  #
+  # NOTE: NVFP4 quantization is Blackwell-exclusive and will not load on L40S.
+  #       Set VLLM_MODEL in .env to a BF16 or FP8 checkpoint.
   vllm:
-    image: nvcr.io/nvidia/vllm:${VLLM_NGC_TAG:-26.02-py3}
+    image: nvcr.io/nvidia/vllm:${VLLM_NGC_TAG:-26.03-py3}
     container_name: vllm
     restart: unless-stopped
     ports:
       - "${VLLM_PORT:-8000}:8000"
     volumes:
       - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
-      - ./vllm_plugins:/vllm_plugins:ro
     command:
       - "vllm"
       - "serve"
-      - "${VLLM_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}"
+      - "${VLLM_MODEL:-Qwen/Qwen3.5-35B-A3B-FP8}"
       - "--host"
       - "0.0.0.0"
       - "--port"
@@ -104,24 +96,19 @@ services:
       - "--max-model-len"
       - "${VLLM_MAX_MODEL_LEN:-32768}"
       - "--gpu-memory-utilization"
-      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.92}"
       - "--max-num-seqs"
-      - "${VLLM_MAX_NUM_SEQS:-8}"
+      - "${VLLM_MAX_NUM_SEQS:-32}"
       - "--kv-cache-dtype"
       - "${VLLM_KV_CACHE_DTYPE:-fp8}"
       - "--trust-remote-code"
       - "--enable-auto-tool-choice"
       - "--tool-call-parser"
-      - "qwen3_coder"
-      - "--reasoning-parser-plugin"
-      - "/vllm_plugins/nano_v3_reasoning_parser.py"
+      - "${VLLM_TOOL_CALL_PARSER:-qwen3_coder}"
       - "--reasoning-parser"
-      - "nano_v3"
+      - "${VLLM_REASONING_PARSER:-qwen3}"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-      # FP4 MoE kernel tuning — required for Nemotron-30B-NVFP4; harmless for other models
-      - VLLM_USE_FLASHINFER_MOE_FP4=${VLLM_USE_FLASHINFER_MOE_FP4:-1}
-      - VLLM_FLASHINFER_MOE_BACKEND=${VLLM_FLASHINFER_MOE_BACKEND:-throughput}
     ipc: host
     ulimits:
       memlock: -1
@@ -138,63 +125,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 1200s
-
-  # ─── Embedder ────────────────────────────────────────────────────────────────
-  # GPU embedding server (Infinity) — replaces Ollama's embedding function.
-  # Exposes an OpenAI-compatible /v1/embeddings endpoint.
-  # Default model: BAAI/bge-m3  (multilingual, 1024-dim)
-  embedder:
-    build:
-      context: .
-      dockerfile: Dockerfile.infinity
-    image: infinity-gb10:latest
-    container_name: embedder
-    restart: unless-stopped
-    ports:
-      - "${EMBEDDER_PORT:-7997}:7997"
-    volumes:
-      - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
-    command:
-      - "--model-id"
-      - "${EMBEDDER_MODEL:-BAAI/bge-m3}"
-      - "--port"
-      - "7997"
-      - "--host"
-      - "0.0.0.0"
-      - "--batch-size"
-      - "${EMBEDDER_BATCH_SIZE:-32}"
-      - "--device"
-      - "cuda"
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-    ipc: host
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 90s
+      start_period: 300s
 
   # ─── Docling ─────────────────────────────────────────────────────────────────
-  # Document extraction + OCR. Built on NGC PyTorch 26.01 for sm_121 support.
-  # If you want to try the upstream image first (may fail on GB10):
-  #   image: quay.io/docling-project/docling-serve-cu128:latest
+  # Document extraction + OCR.
   docling:
-    build:
-      context: .
-      dockerfile: Dockerfile.docling
-    image: docling-serve-gb10:latest
+    image: quay.io/docling-project/docling-serve-cu128:latest
     container_name: docling
     restart: unless-stopped
     ports:
@@ -207,78 +143,16 @@ services:
       # Increase for large/complex documents
       - DOCLING_SERVE_MAX_SYNC_WAIT=600
       # workers=1 is enforced via CLI flag in Dockerfile CMD (not this env var)
-      # Thread tuning for GB10 (Grace CPU has many cores — adjust to taste)
+      # Thread tuning — adjust to available CPU cores
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
       - DOCLING_SERVE_ENG_LOC_NUM_WORKERS=${DOCLING_WORKERS:-2}
-    # NGC PyTorch recommends ipc=host and raised ulimits to avoid SHMEM issues
-    ipc: host
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 30s
       timeout: 15s
       retries: 5
       start_period: 60s
-
-  # ─── Reranker (optional GPU reranking server) ─────────────────────────────────
-  # Activate with:  docker compose --profile reranker up -d
-  # Then set ENABLE_RAG_HYBRID_SEARCH=true and RAG_RERANKING_ENGINE=external
-  # in .env and restart open-webui.
-  #
-  # Exposes a Cohere-compatible /rerank endpoint.
-  # Default model: BAAI/bge-reranker-v2-m3  (multilingual cross-encoder)
-  reranker:
-    build:
-      context: .
-      dockerfile: Dockerfile.infinity
-    image: infinity-gb10:latest
-    container_name: reranker
-    restart: unless-stopped
-    profiles: [reranker]
-    ports:
-      - "${RERANKER_PORT:-7998}:7998"
-    volumes:
-      - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
-    command:
-      - "--model-id"
-      - "${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}"
-      - "--port"
-      - "7998"
-      - "--host"
-      - "0.0.0.0"
-      - "--batch-size"
-      - "${RERANKER_BATCH_SIZE:-32}"
-      - "--device"
-      - "cuda"
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-    ipc: host
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7998/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 90s
 
   # ─── Qdrant (optional external vector store) ─────────────────────────────────
   # Activate with:  docker compose --profile qdrant up -d

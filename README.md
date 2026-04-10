@@ -1,16 +1,14 @@
-# Open WebUI + vLLM + Docling on DGX Spark
+# Open WebUI + vLLM + Docling on L40S
 
-Local AI stack optimised for the **NVIDIA DGX Spark (GB10 / Blackwell sm_121)**.
-vLLM is the sole inference backend; [Infinity](https://github.com/michaelfeil/infinity) handles embeddings.
-Ollama is not used.
+Local AI stack optimised for the **NVIDIA L40S (Ada Lovelace sm_89)**.
+vLLM is the sole inference backend. Embeddings and reranking use Open WebUI's
+built-in sentence-transformers engine (CPU). Ollama is not used.
 
 | Service | Image | Port | Profile |
 |---|---|---|---|
 | Open WebUI | `ghcr.io/open-webui/open-webui:main` | 3000 | *(always on)* |
-| vLLM | `nvcr.io/nvidia/vllm:26.02-py3` | 8000 | *(always on)* |
-| Embedder | custom (NGC PyTorch 26.01 base) | 7997 | *(always on)* |
-| Docling | custom (NGC PyTorch 26.01 base) | 5001 | *(always on)* |
-| Reranker | custom (NGC PyTorch 26.01 base) | 7998 | `reranker` |
+| vLLM | `nvcr.io/nvidia/vllm:26.03-py3` | 8000 | *(always on)* |
+| Docling | `quay.io/docling-project/docling-serve-cu128:latest` | 5001 | *(always on)* |
 | Qdrant | `qdrant/qdrant:latest` | 6333 / 6334 | `qdrant` |
 
 ---
@@ -23,7 +21,7 @@ Ollama is not used.
   sudo systemctl restart docker
   ```
 - Docker Engine >= 24 with Compose v2
-- ~40 GB free disk (NGC PyTorch base ~10 GB, models downloaded on first run)
+- ~40 GB free disk (models downloaded on first run)
 
 ---
 
@@ -34,20 +32,11 @@ Ollama is not used.
 cp .env.example .env
 #    Edit .env — set WEBUI_SECRET_KEY, VLLM_MODEL, and HUGGING_FACE_HUB_TOKEN
 
-# 2. Download the Nemotron reasoning parser (required for all Nemotron-Nano models)
-mkdir -p ./vllm_plugins
-wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
-  https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
-
-# 3. Build the GB10-compatible images (Docling + Infinity)
-#    vLLM uses the official NGC image — no build needed for it
-docker compose build docling embedder
-
-# 4. Start everything
-#    vLLM pulls nvcr.io/nvidia/vllm:26.02-py3 then downloads VLLM_MODEL from HF
+# 2. Start everything
+#    All images are pulled from public registries — no custom builds required
 docker compose up -d
 
-# 5. Open the UI — vLLM models appear automatically once healthy (~15 min for 30B)
+# 3. Open the UI — vLLM models appear automatically once healthy
 open http://localhost:3000
 ```
 
@@ -60,52 +49,51 @@ Docling UI (for testing document extraction): http://localhost:5001/ui
 ```
 ┌──────────────────────────────────────────────────────┐
 │                   Open WebUI :3000                   │
-│          (chat · RAG · document upload)              │
-└──────────┬──────────────┬──────────────┬─────────────┘
-           │              │              │
-       vLLM API     Embedder API    Docling API
-       :8000/v1      :7997/v1         :5001
-           │              │              │
-   ┌───────┴──────┐ ┌─────┴──────┐ ┌───┴────────────┐
-   │     vLLM     │ │  Infinity  │ │    Docling     │
-   │  (inference) │ │(embeddings)│ │ (OCR + extract)│
-   └──────────────┘ └────────────┘ └────────────────┘
-         GPU              GPU            GPU
+│   chat · RAG · embeddings (built-in) · doc upload   │
+└────────────────────┬─────────────────┬───────────────┘
+                     │                 │
+                 vLLM API         Docling API
+                 :8000/v1            :5001
+                     │                 │
+             ┌───────┴──────┐ ┌───────┴────────┐
+             │     vLLM     │ │    Docling     │
+             │  (inference) │ │ (OCR + extract)│
+             └──────────────┘ └────────────────┘
+                   GPU               CPU
 ```
 
 ---
 
-## GB10 unified memory budget
+## L40S VRAM budget
 
-The GB10 has **128 GB unified memory** shared between CPU and GPU.
-With the default `VLLM_GPU_MEMORY_UTILIZATION=0.55` and Nemotron-3-Nano-30B-NVFP4:
+The L40S has **48 GB GDDR6 VRAM** per card. All GPU services share this pool.
 
-| Component | Memory |
+### Qwen3.5-35B-A3B-FP8 (default)
+
+35B MoE model, 3B active params, FP8 — weight storage ~35 GB.
+
+| Component | VRAM |
 |---|---|
-| vLLM model weights (30B NVFP4) | ~15 GB |
-| vLLM KV cache (fp8, 0.55 utilization) | ~59 GB |
+| vLLM model weights (35B MoE FP8) | ~35 GB |
+| vLLM KV cache (fp8, 0.85 utilization) | ~6 GB |
 | Embedder (bge-m3) | ~3 GB |
-| Docling (EasyOCR, multiple language models) | ~9 GB |
-| OS + desktop | ~1 GB |
-| **Total** | **~87 GB** |
-| **Headroom** | **~41 GB** |
+| Docling (EasyOCR) | ~9 GB |
+| **Total** | **~53 GB** |
 
-> Figures measured from `nvidia-smi` on a live stack. Docling uses ~9 GB due to
-> EasyOCR loading multiple language model weights — significantly more than the ~3 GB
-> often cited in documentation.
+> Total exceeds 48 GB. Move embedder and/or Docling to CPU, or reduce
+> `VLLM_GPU_MEMORY_UTILIZATION` to `0.70` to give vLLM a smaller footprint.
+> Alternatively use a multi-GPU setup — set `VLLM_TENSOR_PARALLEL_SIZE=2`.
 
-Raise `VLLM_GPU_MEMORY_UTILIZATION` toward `0.70` for longer context windows;
-add the reranker (~2 GB) with `--profile reranker` (reduces headroom to ~39 GB).
+### Nemotron-3-Nano-30B-A3B
+
+> **NVFP4 is Blackwell-exclusive** — the `NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4`
+> checkpoint will not load on L40S. Set `VLLM_MODEL` in `.env` to a BF16 or FP8
+> variant. Check https://huggingface.co/nvidia for available checkpoints.
+
+At BF16, the 30B MoE model (3B active) occupies ~60 GB — requires 2× L40S
+(`VLLM_TENSOR_PARALLEL_SIZE=2`). An FP8 variant would fit on a single L40S (~30 GB weights).
 
 ---
-
-## Why custom images for Docling and Infinity?
-
-The upstream `michaelfeil/infinity` and `docling-serve-cu128` images target **CUDA 12.x** and lack native `sm_121` kernels for the GB10 Blackwell architecture, causing runtime JIT compilation failures.
-
-`Dockerfile.docling` and `Dockerfile.infinity` build on `nvcr.io/nvidia/pytorch:26.01-py3` which ships **CUDA 13.1** with full `sm_121` support.
-
-vLLM uses NVIDIA's official NGC image (`nvcr.io/nvidia/vllm:26.02-py3`) which already includes Blackwell support — no custom build needed.
 
 ---
 
@@ -116,12 +104,37 @@ All tunables live in `.env`. Key ones:
 | Variable | Default | Notes |
 |---|---|---|
 | `WEBUI_SECRET_KEY` | *(must set)* | Change before first run |
-| `VLLM_MODEL` | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4` | Any HuggingFace model ID |
-| `VLLM_GPU_MEMORY_UTILIZATION` | `0.55` | See memory budget above |
-| `VLLM_MAX_MODEL_LEN` | `8192` | Context window in tokens |
-| `EMBEDDER_MODEL` | `BAAI/bge-m3` | Any sentence-transformers model |
-| `OMP_NUM_THREADS` | `8` | Grace CPU has 72 Arm cores |
+| `VLLM_MODEL` | `Qwen/Qwen3.5-35B-A3B-FP8` | FP16/FP8 only — NVFP4 is Blackwell-exclusive |
+| `VLLM_GPU_MEMORY_UTILIZATION` | `0.85` | See memory budget above |
+| `VLLM_TENSOR_PARALLEL_SIZE` | `1` | Set to number of L40S GPUs for multi-GPU |
+| `VLLM_MAX_MODEL_LEN` | `32768` | Context window in tokens |
+| `VLLM_TOOL_CALL_PARSER` | `qwen3_coder` | Match to your model family |
+| `RAG_EMBEDDING_MODEL` | `BAAI/bge-m3` | Any sentence-transformers model |
+| `OMP_NUM_THREADS` | `8` | Adjust to available CPU cores |
 | `DOCLING_WORKERS` | `2` | Parallel doc extraction workers |
+
+> **`RAG_EMBEDDING_ENGINE` must be set to an empty string** (not `sentence_transformers`)
+> to activate Open WebUI's built-in engine. Setting it to `sentence_transformers` raises
+> `ValueError: Unknown embedding engine` and crashes the container on startup.
+
+### Switching between Qwen3.5 and Nemotron-3-Nano
+
+```bash
+# Qwen3.5-35B-A3B-FP8 (default)
+docker compose up -d
+
+# Nemotron-3-Nano
+# 1. Download the reasoning parser plugin (once)
+mkdir -p ./vllm_plugins
+wget -O ./vllm_plugins/nano_v3_reasoning_parser.py \
+  https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4/resolve/main/nano_v3_reasoning_parser.py
+
+# 2. Set the non-NVFP4 checkpoint in .env
+#    VLLM_MODEL=nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B   ← verify on huggingface.co/nvidia
+
+# 3. Start with the Nemotron override
+docker compose -f docker-compose.yml -f docker-compose.nemotron.yml up -d
+```
 
 ### Use a reranker (hybrid search)
 
@@ -171,15 +184,6 @@ QDRANT_API_KEY=<optional-key>
 
 ```env
 DOCLING_SERVE_PIPELINE_OPTIONS__DO_OCR=false
-```
-
-### Switch to upstream Docling image (no GB10 GPU support)
-
-Comment out the `build:` block in `docker-compose.yml` and replace with:
-
-```yaml
-docling:
-  image: quay.io/docling-project/docling-serve-cu128:latest
 ```
 
 ---
